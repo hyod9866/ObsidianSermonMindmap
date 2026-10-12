@@ -1,0 +1,300 @@
+{
+ "at": "2026-10-03T07:43:39.677Z",
+ "platform": {
+  "isMobile": false,
+  "isTablet": false,
+  "isIosApp": false,
+  "isDesktop": true
+ },
+ "settings": {
+  "rdFontBody": "Freesentation-7Bold",
+  "rdFontHead": "NanumSquare Neo Heavy",
+  "rdFontVerse": "NanumSquare Neo ExtraBold",
+  "rdVerseFont": false,
+  "rdMarkLineFont": "Freesentation-1Thin",
+  "markLineFont": "Freesentation-9Black",
+  "markStrongFont": "Freesentation-9Black",
+  "mmFontVerse": "NanumSquare Neo ExtraBold",
+  "edVerseFont": true,
+  "rdMarkLineColor": "081ec4"
+ },
+ "bundled": [
+  "Freesentation-1Thin",
+  "Freesentation-5Medium",
+  "Freesentation-7Bold",
+  "Freesentation-9Black",
+  "NanumSquareNeoExtraBold",
+  "NanumSquareNeoHeavy",
+  "NotoSansKR-ExtraBold",
+  "NotoSansKR-SemiBold",
+  "NotoSansKR-VF",
+  "Paperlogy 7 Bold",
+  "RIDIBatang",
+  "NanumSquare Neo ExtraBold",
+  "NanumSquare Neo Heavy",
+  "Freesentation-2ExtraLight",
+  "Freesentation-3Light",
+  "Freesentation-4Regular",
+  "Freesentation-6SemiBold",
+  "Freesentation-8ExtraBold"
+ ],
+ "targets": [
+  {
+   "name": "strongCell",
+   "text": "학습목표",
+   "family": "Freesentation-7Bold, smr-body-local, Freesentation-7Bold, RIDIBatang, \"Freesentation 5\", \"??\", ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, \"Segoe UI\", \"Google Sans Flex\", Roboto, \"Inter Variable\", Inter, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", sans-serif",
+   "weight": "400",
+   "chain": [
+    "SPAN.smr-vtext-cell",
+    "SPAN.smr-vline.smr-vd0.smr-vline-strong",
+    "P.",
+    "DIV.smr-page [style=width: 754px; height: 974px;]",
+    "DIV.smr-flow.markdown-rendered [style=transform: translateX(-4050px); display: flex; height: 974px; --smr-gap: 56px;]",
+    "DIV.smr-clip [style=width: 834px; padding: 40px; height: 1086px;]",
+    "DIV.smr-stage",
+    "DIV.smr-root.smr-light.smr-no-anim.smr-fixed-frame [style=--smr-font-body: \"Freesentation-7Bold\", \"smr-body-local\", \"Freesentation-7Bold\", var(--font-text); --smr-font-head: \"NanumSquareNeoHeavy\", \"NanumSquare Neo Heavy\", \"smr-head-local\", \"NanumSquare Neo H]"
+   ],
+   "matched": [
+    {
+     "hit": "parent4",
+     "sel": ".smr-flow",
+     "ff": "var(--smr-font-body)",
+     "imp": "",
+     "mv": "",
+     "owner": "STYLE"
+    },
+    {
+     "hit": "parent1",
+     "sel": ".smr-root .smr-flow .smr-vline-strong",
+     "ff": "var(--smr-mark-line-font, inherit)",
+     "imp": "",
+     "mv": "",
+     "owner": "STYLE"
+    }
+   ]
+  },
+  {
+   "name": "strongLine",
+   "text": "✓ 학습목표",
+   "family": "Freesentation-7Bold, smr-body-local, Freesentation-7Bold, RIDIBatang, \"Freesentation 5\", \"??\", ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, \"Segoe UI\", \"Google Sans Flex\", Roboto, \"Inter Variable\", Inter, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", sans-serif",
+   "weight": "400",
+   "chain": [
+    "SPAN.smr-vline.smr-vd0.smr-vline-strong",
+    "P.",
+    "DIV.smr-page [style=width: 754px; height: 974px;]",
+    "DIV.smr-flow.markdown-rendered [style=transform: translateX(-4050px); display: flex; height: 974px; --smr-gap: 56px;]",
+    "DIV.smr-clip [style=width: 834px; padding: 40px; height: 1086px;]",
+    "DIV.smr-stage",
+    "DIV.smr-root.smr-light.smr-no-anim.smr-fixed-frame [style=--smr-font-body: \"Freesentation-7Bold\", \"smr-body-local\", \"Freesentation-7Bold\", var(--font-text); --smr-font-head: \"NanumSquareNeoHeavy\", \"NanumSquare Neo Heavy\", \"smr-head-local\", \"NanumSquare Neo H]"
+   ],
+   "matched": [
+    {
+     "hit": "parent3",
+     "sel": ".smr-flow",
+     "ff": "var(--smr-font-body)",
+     "imp": "",
+     "mv": "",
+     "owner": "STYLE"
+    },
+    {
+     "hit": "self",
+     "sel": ".smr-root .smr-flow .smr-vline-strong",
+     "ff": "var(--smr-mark-line-font, inherit)",
+     "imp": "",
+     "mv": "",
+     "owner": "STYLE"
+    }
+   ]
+  },
+  {
+   "name": "strongP",
+   "text": "✓ 학습목표\nㆍ 1. 성경적인 ‘예배’의 의미를 압니다",
+   "family": "Freesentation-7Bold, smr-body-local, Freesentation-7Bold, RIDIBatang, \"Freesentation 5\", \"??\", ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, \"Segoe UI\", \"Google Sans Flex\", Roboto, \"Inter Variable\", Inter, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", sans-serif",
+   "weight": "400",
+   "chain": [
+    "P.",
+    "DIV.smr-page [style=width: 754px; height: 974px;]",
+    "DIV.smr-flow.markdown-rendered [style=transform: translateX(-4050px); display: flex; height: 974px; --smr-gap: 56px;]",
+    "DIV.smr-clip [style=width: 834px; padding: 40px; height: 1086px;]",
+    "DIV.smr-stage",
+    "DIV.smr-root.smr-light.smr-no-anim.smr-fixed-frame [style=--smr-font-body: \"Freesentation-7Bold\", \"smr-body-local\", \"Freesentation-7Bold\", var(--font-text); --smr-font-head: \"NanumSquareNeoHeavy\", \"NanumSquare Neo Heavy\", \"smr-head-local\", \"NanumSquare Neo H]"
+   ],
+   "matched": [
+    {
+     "hit": "parent2",
+     "sel": ".smr-flow",
+     "ff": "var(--smr-font-body)",
+     "imp": "",
+     "mv": "",
+     "owner": "STYLE"
+    }
+   ]
+  },
+  {
+   "name": "bodyCell",
+   "text": "1. 성경적인 ‘예배’의 의미를 압니다.2. 우리의 삶",
+   "family": "Freesentation-7Bold, smr-body-local, Freesentation-7Bold, RIDIBatang, \"Freesentation 5\", \"??\", ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, \"Segoe UI\", \"Google Sans Flex\", Roboto, \"Inter Variable\", Inter, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", sans-serif",
+   "weight": "400",
+   "chain": [
+    "SPAN.smr-vtext-cell",
+    "SPAN.smr-vline.smr-vd1",
+    "P.",
+    "DIV.smr-page [style=width: 754px; height: 974px;]",
+    "DIV.smr-flow.markdown-rendered [style=transform: translateX(-4050px); display: flex; height: 974px; --smr-gap: 56px;]",
+    "DIV.smr-clip [style=width: 834px; padding: 40px; height: 1086px;]",
+    "DIV.smr-stage",
+    "DIV.smr-root.smr-light.smr-no-anim.smr-fixed-frame [style=--smr-font-body: \"Freesentation-7Bold\", \"smr-body-local\", \"Freesentation-7Bold\", var(--font-text); --smr-font-head: \"NanumSquareNeoHeavy\", \"NanumSquare Neo Heavy\", \"smr-head-local\", \"NanumSquare Neo H]"
+   ],
+   "matched": [
+    {
+     "hit": "parent4",
+     "sel": ".smr-flow",
+     "ff": "var(--smr-font-body)",
+     "imp": "",
+     "mv": "",
+     "owner": "STYLE"
+    }
+   ]
+  },
+  {
+   "name": "h2",
+   "text": "1. 신령과 진정으로 드림 (구원받고 말씀의 인도를 받",
+   "family": "NanumSquareNeoHeavy, \"NanumSquare Neo Heavy\", smr-head-local, \"NanumSquare Neo Heavy\", NanumSquareNeoHeavy, RIDIBatang, \"Freesentation 5\", \"??\", ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, \"Segoe UI\", \"Google Sans Flex\", Roboto, \"Inter Variable\", Inter, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", sans-serif",
+   "weight": "600",
+   "chain": [
+    "H2.",
+    "DIV.smr-page [style=width: 754px; height: 974px;]",
+    "DIV.smr-flow.markdown-rendered [style=transform: translateX(-4050px); display: flex; height: 974px; --smr-gap: 56px;]",
+    "DIV.smr-clip [style=width: 834px; padding: 40px; height: 1086px;]",
+    "DIV.smr-stage",
+    "DIV.smr-root.smr-light.smr-no-anim.smr-fixed-frame [style=--smr-font-body: \"Freesentation-7Bold\", \"smr-body-local\", \"Freesentation-7Bold\", var(--font-text); --smr-font-head: \"NanumSquareNeoHeavy\", \"NanumSquare Neo Heavy\", \"smr-head-local\", \"NanumSquare Neo H]"
+   ],
+   "matched": [
+    {
+     "hit": "self",
+     "sel": "h2, .markdown-rendered h2",
+     "ff": "var(--h2-font)",
+     "imp": "",
+     "mv": "",
+     "owner": "LINK"
+    },
+    {
+     "hit": "parent2",
+     "sel": ".smr-flow",
+     "ff": "var(--smr-font-body)",
+     "imp": "",
+     "mv": "",
+     "owner": "STYLE"
+    },
+    {
+     "hit": "self",
+     "sel": ".smr-flow h1, .smr-flow h2, .smr-flow h3, .smr-flow h4, .smr-flow h5, .smr-flow h6",
+     "ff": "var(--smr-font-head)",
+     "imp": "",
+     "mv": "",
+     "owner": "STYLE"
+    },
+    {
+     "hit": "self",
+     "sel": ".markdown-rendered h1, .markdown-rendered h2, .markdown-rendered h3, .markdown-rendered h4, .markdown-rendered h5, .markdown-rendered h6",
+     "ff": "\"NanumSquareNeoHeavy\", \"NanumSquare Neo Heavy\", \"smr-head-local\", \"NanumSquare Neo Heavy\", \"NanumSquareNeoHeavy\", var(--font-text)",
+     "imp": "important",
+     "mv": "",
+     "owner": "smm-mm-style-vars"
+    }
+   ]
+  },
+  {
+   "name": "quote",
+   "text": "(요 4:19-24) 19 여자가 가로되 주여 내가 보",
+   "family": "NanumSquareNeoExtraBold, \"NanumSquare Neo ExtraBold\", smr-quote-local, \"NanumSquare Neo ExtraBold\", NanumSquareNeoExtraBold, RIDIBatang, \"Freesentation 5\", \"??\", ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, \"Segoe UI\", \"Google Sans Flex\", Roboto, \"Inter Variable\", Inter, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", sans-serif",
+   "weight": "400",
+   "chain": [
+    "P.",
+    "BLOCKQUOTE.",
+    "DIV.smr-page [style=width: 754px; height: 974px;]",
+    "DIV.smr-flow.markdown-rendered [style=transform: translateX(-4050px); display: flex; height: 974px; --smr-gap: 56px;]",
+    "DIV.smr-clip [style=width: 834px; padding: 40px; height: 1086px;]",
+    "DIV.smr-stage",
+    "DIV.smr-root.smr-light.smr-no-anim.smr-fixed-frame [style=--smr-font-body: \"Freesentation-7Bold\", \"smr-body-local\", \"Freesentation-7Bold\", var(--font-text); --smr-font-head: \"NanumSquareNeoHeavy\", \"NanumSquare Neo Heavy\", \"smr-head-local\", \"NanumSquare Neo H]"
+   ],
+   "matched": [
+    {
+     "hit": "parent3",
+     "sel": ".smr-flow",
+     "ff": "var(--smr-font-body)",
+     "imp": "",
+     "mv": "",
+     "owner": "STYLE"
+    },
+    {
+     "hit": "self",
+     "sel": ".smr-root .smr-flow blockquote, .smr-root .smr-flow blockquote > *, .smr-root .smr-flow blockquote span, .smr-root .smr-flow blockquote em, .smr-root .smr-flow blockquote strong, .smr-root .smr-flow blockquote a, .smr-root .smr-flow blockquote code, .smr-root .smr-flow blockquote mark, .smr-root .sm",
+     "ff": "var(--smr-font-verse)",
+     "imp": "important",
+     "mv": "",
+     "owner": "STYLE"
+    },
+    {
+     "hit": "self",
+     "sel": ".markdown-rendered blockquote, .markdown-rendered blockquote *",
+     "ff": "\"나눔스퀘어 네오 Black\", 리디바탕, sans-serif",
+     "imp": "important",
+     "mv": "",
+     "owner": "STYLE"
+    }
+   ]
+  }
+ ],
+ "rootVars": {
+  "--smr-font-body": "\"Freesentation-7Bold\", \"smr-body-local\", \"Freesentation-7Bold\", RIDIBatang, \"Freesentation 5\", '??', ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, \"Segoe UI\", \"Google Sans Flex\", Roboto, \"Inter Variable\", \"Inter\", \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", sans-serif",
+  "inline--smr-font-body": "\"Freesentation-7Bold\", \"smr-body-local\", \"Freesentation-7Bold\", var(--font-text)",
+  "--smr-font-head": "\"NanumSquareNeoHeavy\", \"NanumSquare Neo Heavy\", \"smr-head-local\", \"NanumSquare Neo Heavy\", \"NanumSquareNeoHeavy\", RIDIBatang, \"Freesentation 5\", '??', ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, \"Segoe UI\", \"Google Sans Flex\", Roboto, \"Inter Variable\", \"Inter\", \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", sans-serif",
+  "inline--smr-font-head": "\"NanumSquareNeoHeavy\", \"NanumSquare Neo Heavy\", \"smr-head-local\", \"NanumSquare Neo Heavy\", \"NanumSquareNeoHeavy\", var(--font-text)",
+  "--smr-font-verse": "\"NanumSquareNeoExtraBold\", \"NanumSquare Neo ExtraBold\", \"smr-quote-local\", \"NanumSquare Neo ExtraBold\", \"NanumSquareNeoExtraBold\", RIDIBatang, \"Freesentation 5\", '??', ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, \"Segoe UI\", \"Google Sans Flex\", Roboto, \"Inter Variable\", \"Inter\", \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", sans-serif",
+  "inline--smr-font-verse": "\"NanumSquareNeoExtraBold\", \"NanumSquare Neo ExtraBold\", \"smr-quote-local\", \"NanumSquare Neo ExtraBold\", \"NanumSquareNeoExtraBold\", var(--font-text)",
+  "--smr-mark-line-font": "",
+  "inline--smr-mark-line-font": "",
+  "--font-text": "RIDIBatang, \"Freesentation 5\", '??', ui-sans-serif, -apple-system, BlinkMacSystemFont, system-ui, \"Segoe UI\", \"Google Sans Flex\", Roboto, \"Inter Variable\", \"Inter\", \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", sans-serif",
+  "inline--font-text": ""
+ },
+ "docVars": {
+  "--smr-font-body": "",
+  "--smr-font-head": "",
+  "--smr-font-verse": "",
+  "--smr-mark-line-font": "",
+  "--font-text": ""
+ },
+ "fonts": [
+  "Source Code Pro|unloaded|normal",
+  "Source Code Pro|unloaded|normal",
+  "Source Code Pro|unloaded|bold",
+  "Source Code Pro|unloaded|bold",
+  "Flow Circular|unloaded|normal",
+  "Inter|loaded|100 900",
+  "Inter|unloaded|100 900",
+  "smm-verse-local|unloaded|normal",
+  "smr-body-local|unloaded|normal",
+  "smr-head-local|unloaded|normal",
+  "smr-quote-local|unloaded|normal",
+  "smr-markline-local|unloaded|normal",
+  "Freesentation-1Thin|loaded|normal",
+  "Freesentation-5Medium|loaded|normal",
+  "Freesentation-7Bold|loaded|normal",
+  "Freesentation-9Black|loaded|normal",
+  "NanumSquareNeoExtraBold|loaded|normal",
+  "NanumSquareNeoHeavy|loaded|normal",
+  "NotoSansKR-ExtraBold|loaded|normal",
+  "NotoSansKR-SemiBold|loaded|normal",
+  "NotoSansKR-VF|loaded|normal",
+  "Paperlogy 7 Bold|loaded|normal",
+  "RIDIBatang|loaded|normal",
+  "NanumSquare Neo ExtraBold|loaded|normal",
+  "NanumSquare Neo Heavy|loaded|normal",
+  "Freesentation-2ExtraLight|loaded|normal",
+  "Freesentation-3Light|loaded|normal",
+  "Freesentation-4Regular|loaded|normal",
+  "Freesentation-6SemiBold|loaded|normal",
+  "Freesentation-8ExtraBold|loaded|normal"
+ ]
+}
