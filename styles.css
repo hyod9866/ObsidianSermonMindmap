@@ -163,7 +163,7 @@
 
 /* [대괄호] 강조 */
 .smm-node .smm-bracket {
-  color: var(--color-yellow, #d4a72c);
+  color: var(--text-accent);
   font-weight: 600;
 }
 
@@ -219,6 +219,11 @@
   font-weight: 800;
   color: var(--smm-mark-strong-color, #BF4E14);
   font-size: var(--smm-mark-strong-scale, 1.1em);
+  display: inline-block;
+  width: 0.8em;
+  text-align: center;
+  vertical-align: baseline;
+  box-sizing: border-box;
   margin-right: 0.15em;
 }
 /* ✓ 표시가 붙은 줄은, 다크 모드에서 뒤따르는 문장 전체를 옅은 노란빛으로 살짝
@@ -302,6 +307,7 @@
 }
 .smm-node.smm-verse {
   font-size: var(--smm-mm-size-verse, 13.5px);
+  color: var(--smm-mm-color-verse, inherit);
   max-width: var(--smm-mm-width-verse, 420px);
   /* `>`로 인용한 경우(blockquote)와 "책 장:절" 형태로만 인식된 경우(일반 문단)가
      같은 줄간격을 쓰도록 통일함 — 안 그러면 글줄 수가 달라도 상자 높이가 서로 안
@@ -322,9 +328,18 @@
    켜지고 `>` 글자도 화면에 그대로 남는 문제가 있었다 — smmMarkNodeBodyLines가 `>` 줄만은
    <span>으로 감싸지 않고 원문 그대로 내보내도록 고쳐서, 다시 진짜 <blockquote>가
    그려지고 `>` 기호는 화면에 안 남는다.) */
-.smm-node.smm-verse:has(blockquote) {
-  border-left-color: var(--interactive-accent);
-  border-left-width: 3px;
+.smm-node:has(blockquote),
+.smm-node.smm-quote {
+  border-left-color: var(--interactive-accent) !important;
+  border-left-width: 3px !important;
+}
+.smm-node:has(blockquote),
+.smm-node.smm-quote,
+.smm-node:has(blockquote) *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref),
+.smm-node.smm-quote *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref),
+.smm-node blockquote,
+.smm-node blockquote *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref) {
+  color: var(--smm-mm-color-quote, inherit);
 }
 /* "(책 장:절)" 장절 표시 배지 — 연한 연두 배경 + 검정 글씨로 고정해서, 마인드맵
    테마(라이트/다크)와 상관없이 항상 또렷하게 보이도록 함. 마인드맵 성경구절 글꼴/색
@@ -346,7 +361,8 @@
    .smm-verse-ref와 똑같은 모양(연두 배경+검정 글씨)으로 입혀서, 인용이든 아니든
    배지가 항상 같은 색으로 보이게 한다. blockquote 안으로만 한정해서, 사용자가 직접
    본문에 Ctrl/Cmd+Shift+H로 강조한 일반 <mark>(노란 하이라이트)는 그대로 둔다. */
-.smm-node blockquote mark {
+.smm-node blockquote mark.smm-verse-ref,
+.smm-node blockquote span.smm-verse-ref {
   background: #D9F2C4 !important;
   color: #111827 !important;
   font-family: var(--font-text) !important;
@@ -581,18 +597,32 @@
   color: var(--text-faint);
   font-size: var(--smm-ed-mark-size, 0.85em);
   font-weight: 600;
+  display: inline-block;
+  box-sizing: border-box;
+  text-align: left;
+  vertical-align: baseline;
   margin-right: 0.35em;
   user-select: none;
 }
-/* 깊이 0의 ✓ 표시는 본문 글씨체가 얼마나 두껍든 상관없이 항상 도드라져
-   보이도록 더 굵게 + 주황색으로 눈에 띄게 보여준다. 크기도 "-" 표시(0.85em)보다
-   또렷이 크게(1.1em) 잡아서, 바로 아래 하위 표시/본문과 한눈에 구분되게 한다.
-   색·폰트·크기 배율은 설정 화면("설교문(편집) 화면" 구역)에서 조절 가능 — 마인드맵의
-   smm-node-mark-strong과 값을 공유한다(같은 --smm-mark-strong-* 변수). */
+/* 깊이 0의 대지 기호(✓ 및 커스텀 기호)는 기호 종류(✓, ▶, ■, ●, ※ 등)에 상관없이
+   항상 컴팩트한 고정 폭(0.8em)과 중앙 정렬, 적절한 여백(0.2em)을 적용하여
+   기존 ✓의 자연스러운 여백감을 그대로 유지하면서도 본문 문장의 시작 위치(들여쓰기)를 정돈한다. */
 .smm-ed-vmark-strong {
   font-weight: 800;
   color: var(--smm-mark-strong-color, #BF4E14);
   font-size: var(--smm-mark-strong-scale, 1.1em);
+  width: 0.8em;
+  margin-right: 0.2em;
+  text-align: center;
+}
+/* 숫자·글머리 대지(1., (1), 가., ① 등 2글자 이상 또는 전각 원문자)는 고정 폭 0.8em 대신 내용에 맞춰 자동 확장 */
+.smm-ed-vmark-strong.smm-mark-wide,
+.smm-node .smm-node-mark-strong.smm-mark-wide,
+.smr-root .smr-flow .smr-mark-strong.smm-mark-wide {
+  width: auto;
+  min-width: 1.05em;
+  margin-right: 0.3em;
+  text-align: left;
 }
 /* ✓ 표시가 붙은 줄은, 다크 모드에서 뒤따르는 문장 전체를 옅은 노란빛으로 살짝
    물들여 — ✓만 도드라지고 정작 문장은 눈에 잘 안 띈다는 피드백에 따른 것.
@@ -747,6 +777,45 @@
 .smr-flow,
 .smr-clip {
   overflow-anchor: none;
+}
+
+/* 위아래 스크롤 모드(장 나누지 않고 쭉 보기):
+   - 아이패드에서 손가락으로 위아래 스크롤(pan-y)이 자연스럽게 되도록 touch-action을 풀고
+     (애플펜슬로 필기할 때는 touch-action: none으로 다시 잠금),
+   - .smr-flow 자체를 세로 스크롤 상자로 써서 글과 펜슬 필기 층(.smr-ink-layer)이 함께 움직이게 한다.
+   - 설교 마지막 줄도 강대상 눈높이까지 충분히 올려서 읽을 수 있도록 아래쪽 여백(45vh)을 넉넉히 둔다. */
+.smr-root.smr-scroll-mode,
+.smr-root.smr-scroll-mode .smr-stage,
+.smr-root.smr-scroll-mode .smr-clip,
+.smr-root.smr-scroll-mode .smr-flow {
+  touch-action: pan-y;
+}
+.smr-root.smr-scroll-mode.smr-ink-drawing,
+.smr-root.smr-scroll-mode.smr-ink-drawing .smr-stage,
+.smr-root.smr-scroll-mode.smr-ink-drawing .smr-clip {
+  touch-action: pan-y;
+}
+.smr-root.smr-scroll-mode .smr-flow {
+  display: block;
+  isolation: isolate;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  box-sizing: border-box;
+  padding-top: calc(var(--smr-size-body, 20px) * var(--smr-line, 1.5));
+  padding-bottom: 45vh;
+  transition: none;
+  will-change: auto;
+}
+.smr-root.smr-scroll-mode .smr-flow::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+.smr-root.smr-scroll-mode .smr-flow > :first-child {
+  margin-top: 0 !important;
 }
 
 /* ---------- 글자 ---------- */
@@ -937,6 +1006,11 @@
   font-weight: 800;
   color: var(--smr-mark-color, #BF4E14);
   font-size: var(--smr-mark-scale, 1.1em);
+  display: inline-block;
+  width: 0.8em;
+  text-align: center;
+  vertical-align: baseline;
+  box-sizing: border-box;
   margin-right: 0.15em;
 }
 /* 강대상의 ✓ 줄(✓ 옆 문장) 글자색·글꼴·크기 — 설정 "✓ 줄 글자 … (강대상)".
@@ -1008,21 +1082,24 @@
    내 설명/적용점)까지 전부 파란 글씨가 되어 버리므로, 실제 글자를 감싸는 인라인
    태그만 콕 집어 지정하고 ul/ol/li 같은 블록 요소는 건드리지 않는다. */
 .smr-root .smr-flow blockquote,
-.smr-root .smr-flow blockquote > *,
-.smr-root .smr-flow blockquote span,
+.smr-root .smr-flow blockquote > *:not(.smm-bracket):not(.smm-bracket-text):not(.smm-bracket-edge):not(.smm-verse-ref),
+.smr-root .smr-flow blockquote span:not(.smm-bracket):not(.smm-bracket-text):not(.smm-bracket-edge):not(.smm-verse-ref),
 .smr-root .smr-flow blockquote em,
 .smr-root .smr-flow blockquote strong,
 .smr-root .smr-flow blockquote a,
 .smr-root .smr-flow blockquote code,
-.smr-root .smr-flow blockquote mark,
+.smr-root .smr-flow blockquote mark {
+  font-family: var(--smr-font-verse) !important;
+  color: var(--smr-quote, var(--smr-verse)) !important;
+}
 .smr-root .smr-flow .smr-verse,
-.smr-root .smr-flow .smr-verse > span,
+.smr-root .smr-flow .smr-verse > span:not(.smm-bracket):not(.smm-bracket-text):not(.smm-bracket-edge):not(.smm-verse-ref),
 .smr-root .smr-flow .smr-verse > em,
 .smr-root .smr-flow .smr-verse > strong,
 .smr-root .smr-flow .smr-verse > a,
 .smr-root .smr-flow .smr-verse > code,
 .smr-root .smr-flow .smr-verse > mark,
-.smr-root .smr-flow .smr-verse span,
+.smr-root .smr-flow .smr-verse span:not(.smm-bracket):not(.smm-bracket-text):not(.smm-bracket-edge):not(.smm-verse-ref),
 .smr-root .smr-flow .smr-verse em,
 .smr-root .smr-flow .smr-verse strong,
 .smr-root .smr-flow .smr-verse a,
@@ -1390,26 +1467,94 @@
    방법이라 3단계·4단계 이상도 같은 규칙이 그대로 이어져 적용된다.
    숫자 목록(1. 2. 3.)은 편집 화면에서도 손대지 않았으므로 여기서도
    손대지 않는다(순서 있는 목록은 그대로 옵시디언 기본 표시). */
-.markdown-preview-view li ul {
-  margin: 0 !important;
-  padding: 0 !important;
+/* 읽기 화면 목록: 브라우저 기본 ::marker 완전 제거 (중복 점 •• 및 •- 원천 방지) */
+.markdown-rendered ul,
+.markdown-rendered ol,
+.markdown-rendered li,
+.markdown-preview-view ul,
+.markdown-preview-view ol,
+.markdown-preview-view li {
+  list-style: none !important;
+  list-style-type: none !important;
+}
+.markdown-rendered li::marker,
+.markdown-preview-view li::marker {
+  content: "" !important;
+  font-size: 0 !important;
+  display: none !important;
+  color: transparent !important;
+}
+
+/* 1단계(최상위) 순서 없는 목록: 단일 글머리 점(•) */
+.markdown-rendered ul > li > .list-bullet,
+.markdown-preview-view ul > li > .list-bullet {
+  display: inline-block !important;
+}
+
+/* 읽기 화면 중첩 목록 (2단계 이상):
+   옵시디언 기본 글머리 점(•)을 숨기고, 편집 모드와 똑같이 단일 하이픈(-)만 표시.
+   또한 히브리어/헬라어 원어가 문두에 올 때 RTL(우측 정렬)로 뒤집히거나 줄바꿈되는 현상 방지. */
+.markdown-preview-view li ul,
+.markdown-rendered li ul {
   list-style: none !important;
 }
-.markdown-preview-view li ul > li {
+.markdown-preview-view li ul > li,
+.markdown-rendered li ul > li {
   position: relative;
-  /* 글머리표(-) 자리 + 글자 사이 간격. 편집 화면에서 다른 불릿과 같은
-     정도로 좁혀 맞췄던 것과 같은 느낌으로, 너무 넓지 않게 잡았다.
-     (화면을 직접 보며 픽셀 단위로 맞춘 값이 아니라 합리적으로 잡은
-     값이므로, 실제로 보면 살짝 좁히거나 넓혀야 할 수 있다 — 그럴 땐
-     이 값만 알려주면 바로 고쳐서 다시 보내겠다.) */
   padding-left: 0.85em !important;
+  direction: ltr !important;
+  text-align: left !important;
+  unicode-bidi: embed !important;
 }
-.markdown-preview-view li ul > li::before {
-  content: "-";
+.markdown-preview-view li ul > li > .list-bullet,
+.markdown-rendered li ul > li > .list-bullet,
+.markdown-preview-view li ul > li .list-bullet,
+.markdown-rendered li ul > li .list-bullet {
+  display: none !important;
+}
+.markdown-preview-view li ul > li::before,
+.markdown-rendered li ul > li::before {
+  content: "-" !important;
   position: absolute;
   left: 0;
   top: 0;
   color: var(--text-normal);
+  direction: ltr !important;
+}
+
+/* 읽기 화면 전체(문단/목록)에서 히브리어 원어 문두 표기 시 우측 쏠림/줄바꿈 방지 */
+.markdown-rendered,
+.markdown-rendered li,
+.markdown-preview-view li,
+.markdown-rendered p,
+.markdown-preview-view p {
+  direction: ltr !important;
+  text-align: left !important;
+}
+
+/* 편집/읽기 화면 우측 상단 액션 바 순서:
+   [읽기/편집 모드 (책)] -> [설교문 미리보기 (마이크)] -> [더 많은 옵션 (점 3개 ⋯)] */
+.view-actions .view-action.mod-view-mode,
+.view-actions .clickable-icon[aria-label*="읽기"],
+.view-actions .clickable-icon[aria-label*="편집"],
+.view-actions .clickable-icon[aria-label*="reading"],
+.view-actions .clickable-icon[aria-label*="edit"] {
+  display: flex !important;
+  order: 900 !important;
+}
+.view-actions .view-action.smm-sermon-preview-btn,
+.view-actions .smm-sermon-preview-btn,
+.view-actions [data-smm-btn="preview"] {
+  display: flex !important;
+  order: 920 !important;
+  cursor: pointer;
+}
+.view-actions .view-action.mod-more-options,
+.view-actions .clickable-icon[aria-label*="옵션"],
+.view-actions .clickable-icon[aria-label*="options"],
+.view-actions .clickable-icon.mod-more-options {
+  display: flex !important;
+  order: 950 !important;
 }
 
 
@@ -1445,6 +1590,7 @@
   display: none !important;
 }
 .markdown-rendered li.smm-rv-li::marker { content: ''; }
+.markdown-rendered li.smm-rv-li .list-bullet,
 .markdown-rendered li.smm-rv-li > .list-bullet { display: none !important; }
 /* 표시 자리(smm-rv-slot)와 나머지 글(smm-rv-text-cell, main.js가 표시를 뺀
    원래 내용을 전부 이 안으로 옮겨 담아 둔다)을 표(table)의 두 칸으로 나눠
@@ -1483,7 +1629,7 @@
   width: 100%;
   vertical-align: top;
 }
-.markdown-rendered li.smm-rv-li > .smm-rv-slot > .smm-ed-vmark { margin-right: 0; }
+.markdown-rendered .smm-rv-slot > .smm-ed-vmark { margin-right: 0; }
 /* 편집 화면의 기본 글머리처럼: 맨 윗단 •는 옅은 글머리 색, 하위 단 -는 본문 색 */
 .markdown-rendered li.smm-rv-li > .smm-rv-slot > .smm-rv-default {
   color: var(--text-normal);
@@ -1716,3 +1862,1203 @@
 .smr-ink-swatch.is-active { box-shadow: 0 0 0 3px var(--smr-bg, #fff), 0 0 0 5px var(--smr-text, #333); }
 .smr-ink-sep { width: 1px; height: 34px; margin: 8px 3px; background: color-mix(in srgb, var(--smr-text, #333) 22%, transparent); }
 .smr-ink-clear.is-armed { background: #FA5252; color: #fff; }
+
+/* ==================================================================
+ * Sermon Mindmap Unified Styling & Theme Integration
+ * (Headings, Highlights, UI Tweaks, Folder Hiding)
+ * ================================================================== */
+
+/* ── 1. 체크박스 / 마인드맵 괄호·굵은 표시 / 분홍 글자 / 내부 링크 ── */
+.theme-light input[type="checkbox"]:checked,
+.theme-light .checkbox-container.is-enabled,
+.theme-light .task-list-item-checkbox:checked { background-color: #1244AF !important; border-color: #1244AF !important; }
+.theme-light { --checkbox-color: #1244AF !important; --checkbox-marker-color: #ffffff !important; --checkbox-color-x: #1244AF !important; --checkbox-marker-color-x: #ffffff !important; --checkbox-color-v: #1244AF !important; --checkbox-color-ok: #1244AF !important; --checkbox-color-check: #1244AF !important; }
+.theme-light .markdown-source-view.mod-cm6 .task-list-item-checkbox, .theme-light .markdown-rendered .task-list-item-checkbox { border-color: #1244AF !important; }
+.theme-light .task-list-item-checkbox[data-task] { color: #1244AF !important; }
+.theme-light .smm-node .smm-node-mark-strong { color: #1244AF !important; }
+.smr-root .smr-flow .smm-bracket-text,
+.smr-root .smm-bracket-text,
+.smm-node .smm-bracket-text,
+.smm-bracket-text {
+  color: var(--text-accent) !important;
+  font-weight: 600 !important;
+}
+
+.smr-root .smr-flow .smm-bracket-edge,
+.smr-root .smm-bracket-edge,
+.smm-node .smm-bracket-edge,
+.smm-bracket-edge {
+  color: var(--text-faint, #9ca3af) !important;
+  opacity: 0.7 !important;
+  font-weight: normal !important;
+}
+
+.smm-node .smm-bracket, .smr-root .smm-bracket, .markdown-source-view .smm-bracket, .markdown-rendered .smm-bracket { color: var(--text-accent) !important; }
+.theme-dark .smm-node .smm-bracket, .theme-dark .smr-root .smm-bracket, .theme-dark .markdown-source-view .smm-bracket, .theme-dark .markdown-rendered .smm-bracket { color: var(--text-accent) !important; }
+
+.theme-light font[color="#DB25B4"], .theme-light font[color="#e00096"], .theme-light font[color="#ff1493"], .theme-light font[color="magenta"], .theme-light font[color="#FF00FF"] { color: #475569 !important; }
+.theme-dark font[color="#DB25B4"], .theme-dark font[color="#e00096"], .theme-dark font[color="#ff1493"], .theme-dark font[color="magenta"], .theme-dark font[color="#FF00FF"] { color: #94a3b8 !important; }
+
+.markdown-preview-view .internal-link { color: #1e40af !important; }
+.theme-dark .markdown-preview-view .internal-link { color: #58a6ff !important; }
+
+/* ── 2. ==강조== 하이라이트 색상 통합 ────────────────────────────── */
+.theme-light, .smr-root.smr-light {
+  --hl-default-bg: #fef2a0;
+  --hl-default-text: #595217;
+  --text-highlight-bg: #fef2a0;
+  --hl-red-bg: #FFC2C2;
+  --hl-orange-bg: #FFD6A5;
+  --hl-yellow-bg: #FFF3A3;
+  --hl-green-bg: #BFEBC4;
+  --hl-blue-bg: #BDE0FF;
+  --hl-purple-bg: #DCCBFF;
+}
+.theme-dark, .smr-root.smr-dark {
+  --hl-default-bg: rgba(242, 201, 76, 0.35);
+  --hl-default-text: initial;
+  --text-highlight-bg: rgba(242, 201, 76, 0.35);
+  --hl-red-bg: rgba(235, 87, 87, 0.42);
+  --hl-orange-bg: rgba(242, 153, 74, 0.42);
+  --hl-yellow-bg: rgba(242, 201, 76, 0.35);
+  --hl-green-bg: rgba(111, 207, 151, 0.42);
+  --hl-blue-bg: rgba(86, 204, 242, 0.42);
+  --hl-purple-bg: rgba(155, 81, 224, 0.42);
+}
+
+.markdown-source-view.mod-cm6 .cm-highlight:not([data-highlight]):not([class*="cm-highlight-"]),
+:is(.markdown-rendered, .markdown-preview-view, .smm-node, .smr-root) mark:not([data-highlight]):not([class*="hl-"]):not(.smm-verse-ref):not(:has(.smm-verse-ref)) {
+  background-color: var(--hl-default-bg) !important;
+  color: var(--hl-default-text, inherit) !important;
+}
+
+.cm-highlight-red,
+.cm-highlight[data-highlight="red"],
+mark[data-highlight="red"],
+mark.hl-red,
+.cm-highlight.hl-red {
+  background-color: var(--hl-red-bg) !important;
+  color: inherit !important;
+}
+.cm-highlight-orange,
+.cm-highlight[data-highlight="orange"],
+mark[data-highlight="orange"],
+mark.hl-orange,
+mark.hl-darkYellow,
+.cm-highlight.hl-darkYellow,
+.cm-highlight.hl-orange {
+  background-color: var(--hl-orange-bg) !important;
+  color: inherit !important;
+}
+.cm-highlight-yellow,
+.cm-highlight[data-highlight="yellow"],
+mark[data-highlight="yellow"],
+mark.hl-yellow,
+.cm-highlight.hl-yellow {
+  background-color: var(--hl-yellow-bg) !important;
+  color: inherit !important;
+}
+.cm-highlight-green,
+.cm-highlight[data-highlight="green"],
+mark[data-highlight="green"],
+mark.hl-green,
+.cm-highlight.hl-green {
+  background-color: var(--hl-green-bg) !important;
+  color: inherit !important;
+}
+.cm-highlight-blue,
+.cm-highlight[data-highlight="blue"],
+mark[data-highlight="blue"],
+mark.hl-blue,
+mark.hl-cyan,
+.cm-highlight.hl-cyan,
+.cm-highlight.hl-blue {
+  background-color: var(--hl-blue-bg) !important;
+  color: inherit !important;
+}
+.cm-highlight-purple,
+.cm-highlight[data-highlight="purple"],
+mark[data-highlight="purple"],
+mark.hl-purple,
+mark.hl-magenta,
+.cm-highlight.hl-magenta,
+.cm-highlight.hl-purple {
+  background-color: var(--hl-purple-bg) !important;
+  color: inherit !important;
+}
+
+.cm-highlight {
+  display: inline !important;
+  border-radius: 4px !important;
+  width: auto !important;
+  max-width: 100% !important;
+  height: auto !important;
+  padding: 0 4px !important;
+  margin: 0 !important;
+  box-shadow: none !important;
+}
+.smm-node mark, .smr-root mark {
+  border-radius: 3px;
+  padding: 0 2px;
+}
+mark::selection, mark *::selection, .cm-highlight::selection, .cm-highlight *::selection {
+  background-color: var(--text-selection, rgba(0, 122, 255, 0.3)) !important;
+  color: inherit !important;
+}
+
+.markdown-source-view.mod-cm6 .cm-highlight-color-marker,
+.cm-editor .cm-highlight-color-marker,
+.cm-content [class*="highlight-color-marker"],
+.cm-content [class*="highlight-swatch" i],
+.cm-content [class*="highlight-dot" i] {
+  display: none !important;
+}
+
+/* ── 3. 헤딩(H1~H6) 및 문서 제목 색상 ────────────────────────────── */
+body.theme-dark, body.colorful-headings.theme-dark {
+  --h1-color: #7FB0FF !important;
+  --h2-color: #F2A367 !important;
+  --h3-color: #86D49B !important;
+  --h4-color: #BCC6FF !important;
+  --h5-color: #C9A0F5 !important;
+  --h6-color: #F29BB5 !important;
+  --doc-title-color: #58a6ff;
+}
+
+body.theme-light, body.colorful-headings.theme-light {
+  --h1-color: #1244AF !important;
+  --h2-color: #8C3D0B !important;
+  --h3-color: #14532D !important;
+  --h4-color: #1E3A8A !important;
+  --h5-color: #6B21A8 !important;
+  --h6-color: #7A1E3A !important;
+  --doc-title-color: #1e40af;
+}
+
+.markdown-source-view.mod-cm6 .inline-title,
+.markdown-preview-view .title,
+.view-header-title {
+  color: var(--doc-title-color) !important;
+}
+
+body .markdown-preview-view h1, body .markdown-rendered h1, body .HyperMD-header-1, body .cm-header-1 { color: var(--h1-color, #1244AF) !important; }
+body .markdown-preview-view h2, body .markdown-rendered h2, body .HyperMD-header-2, body .cm-header-2 { color: var(--h2-color, #8C3D0B) !important; }
+body .markdown-preview-view h3, body .markdown-rendered h3, body .HyperMD-header-3, body .cm-header-3 { color: var(--h3-color, #14532D) !important; }
+body .markdown-preview-view h4, body .markdown-rendered h4, body .HyperMD-header-4, body .cm-header-4 { color: var(--h4-color, #1E3A8A) !important; }
+body .markdown-preview-view h5, body .markdown-rendered h5, body .HyperMD-header-5, body .cm-header-5 { color: var(--h5-color, #6B21A8) !important; }
+body .markdown-preview-view h6, body .markdown-rendered h6, body .HyperMD-header-6, body .cm-header-6 { color: var(--h6-color, #7A1E3A) !important; }
+
+.smm-node.smm-h1 { color: var(--h1-color, #1244AF) !important; }
+.smm-node.smm-h2 { color: var(--h2-color, #8C3D0B) !important; }
+.smm-node.smm-h3 { color: var(--h3-color, #14532D) !important; }
+.smm-node.smm-h4 { color: var(--h4-color, #1E3A8A) !important; }
+.smm-node.smm-h5 { color: var(--h5-color, #6B21A8) !important; }
+.smm-node.smm-h6 { color: var(--h6-color, #7A1E3A) !important; }
+
+/* ── 4. 시스템 데이터 폴더 파일 탐색기에서 숨김 ───────────────────── */
+.nav-folder:has([data-path="_설교마인드맵_글꼴"]),
+.nav-folder:has([data-path="_설교마인드맵_필기"]),
+.nav-folder:has([data-path="_bibles"]),
+.nav-folder:has([data-path="_strong"]),
+.nav-folder:has([data-path="_strong_json"]) {
+  display: none !important;
+}
+
+/* ── 5. 설교 리더 뷰(강대상 모드) 속성(Frontmatter) 전용 컴팩트 카드 ── */
+.smr-root .smr-frontmatter-box {
+  background-color: var(--background-secondary, #f2f3f5);
+  border: 1px solid var(--background-modifier-border, #e2e4e8);
+  border-radius: 8px;
+  padding: 8px 14px;
+  margin: 2px 0 16px 0;
+  font-family: var(--font-interface, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif) !important;
+  font-size: 10pt !important;
+  line-height: 1.5 !important;
+  color: var(--text-normal, #2e3338);
+  -webkit-user-select: text;
+  user-select: text;
+}
+.smr-root.smr-dark .smr-frontmatter-box {
+  background-color: var(--background-secondary, #222222);
+  border-color: var(--background-modifier-border, #383838);
+  color: var(--text-muted, #aaa);
+}
+.smr-root .smr-frontmatter-box * {
+  font-family: var(--font-interface, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif) !important;
+}
+.smr-root .smr-fm-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  align-items: center;
+}
+.smr-root .smr-fm-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10pt !important;
+  line-height: 1.5 !important;
+}
+.smr-root .smr-fm-key {
+  font-weight: 600;
+  color: var(--text-muted, #666);
+  font-size: 10pt !important;
+}
+.smr-root.smr-dark .smr-fm-key {
+  color: var(--text-faint, #888);
+}
+.smr-root .smr-fm-val {
+  color: var(--text-normal, #222);
+  font-weight: 500;
+  font-size: 10pt !important;
+}
+.smr-root.smr-dark .smr-fm-val {
+  color: var(--text-normal, #ddd);
+}
+.smr-root .smr-fm-pill {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background-color: var(--background-primary, #ffffff);
+  border: 1px solid var(--background-modifier-border, #d1d5db);
+  font-size: 9pt !important;
+  color: var(--text-accent, #1e40af);
+  line-height: 1.3;
+}
+.smr-root.smr-dark .smr-fm-pill {
+  background-color: var(--background-secondary-alt, #2a2a2a);
+  border-color: var(--background-modifier-border, #444);
+  color: var(--text-accent, #58a6ff);
+}
+
+/* ==================== 노드 명암 (줄 단위 배경 음영) ==================== */
+/* 라이트 테마: 6색 × 3단계 솔리드 파스텔 */
+.smm-shade-r1, .smr-shade-r1 { background-color: #FFE0E0 !important; }
+.smm-shade-r2, .smr-shade-r2 { background-color: #FFC2C2 !important; }
+.smm-shade-r3, .smr-shade-r3 { background-color: #FF9F9F !important; }
+
+.smm-shade-o1, .smr-shade-o1 { background-color: #FFEAD2 !important; }
+.smm-shade-o2, .smr-shade-o2 { background-color: #FFD6A5 !important; }
+.smm-shade-o3, .smr-shade-o3 { background-color: #FFBE73 !important; }
+
+.smm-shade-y1, .smr-shade-y1 { background-color: #FFF9D1 !important; }
+.smm-shade-y2, .smr-shade-y2 { background-color: #FFF3A3 !important; }
+.smm-shade-y3, .smr-shade-y3 { background-color: #FFE066 !important; }
+
+.smm-shade-g1, .smr-shade-g1 { background-color: #DFF5E2 !important; }
+.smm-shade-g2, .smr-shade-g2 { background-color: #BFEBC4 !important; }
+.smm-shade-g3, .smr-shade-g3 { background-color: #8FD99B !important; }
+
+.smm-shade-b1, .smr-shade-b1 { background-color: #DEF0FF !important; }
+.smm-shade-b2, .smr-shade-b2 { background-color: #BDE0FF !important; }
+.smm-shade-b3, .smr-shade-b3 { background-color: #8CC8FF !important; }
+
+.smm-shade-p1, .smr-shade-p1 { background-color: #EEE5FF !important; }
+.smm-shade-p2, .smr-shade-p2 { background-color: #DCCBFF !important; }
+.smm-shade-p3, .smr-shade-p3 { background-color: #BFA6FF !important; }
+
+/* 다크 테마: 16%, 26%, 36% 반투명 */
+body.theme-dark .smm-shade-r1, .smr-root.smr-dark .smr-shade-r1 { background-color: rgba(235, 87, 87, 0.16) !important; }
+body.theme-dark .smm-shade-r2, .smr-root.smr-dark .smr-shade-r2 { background-color: rgba(235, 87, 87, 0.26) !important; }
+body.theme-dark .smm-shade-r3, .smr-root.smr-dark .smr-shade-r3 { background-color: rgba(235, 87, 87, 0.36) !important; }
+
+body.theme-dark .smm-shade-o1, .smr-root.smr-dark .smr-shade-o1 { background-color: rgba(242, 153, 74, 0.16) !important; }
+body.theme-dark .smm-shade-o2, .smr-root.smr-dark .smr-shade-o2 { background-color: rgba(242, 153, 74, 0.26) !important; }
+body.theme-dark .smm-shade-o3, .smr-root.smr-dark .smr-shade-o3 { background-color: rgba(242, 153, 74, 0.36) !important; }
+
+body.theme-dark .smm-shade-y1, .smr-root.smr-dark .smr-shade-y1 { background-color: rgba(242, 201, 76, 0.16) !important; }
+body.theme-dark .smm-shade-y2, .smr-root.smr-dark .smr-shade-y2 { background-color: rgba(242, 201, 76, 0.26) !important; }
+body.theme-dark .smm-shade-y3, .smr-root.smr-dark .smr-shade-y3 { background-color: rgba(242, 201, 76, 0.36) !important; }
+
+body.theme-dark .smm-shade-g1, .smr-root.smr-dark .smr-shade-g1 { background-color: rgba(111, 207, 151, 0.16) !important; }
+body.theme-dark .smm-shade-g2, .smr-root.smr-dark .smr-shade-g2 { background-color: rgba(111, 207, 151, 0.26) !important; }
+body.theme-dark .smm-shade-g3, .smr-root.smr-dark .smr-shade-g3 { background-color: rgba(111, 207, 151, 0.36) !important; }
+
+body.theme-dark .smm-shade-b1, .smr-root.smr-dark .smr-shade-b1 { background-color: rgba(86, 204, 242, 0.16) !important; }
+body.theme-dark .smm-shade-b2, .smr-root.smr-dark .smr-shade-b2 { background-color: rgba(86, 204, 242, 0.26) !important; }
+body.theme-dark .smm-shade-b3, .smr-root.smr-dark .smr-shade-b3 { background-color: rgba(86, 204, 242, 0.36) !important; }
+
+body.theme-dark .smm-shade-p1, .smr-root.smr-dark .smr-shade-p1 { background-color: rgba(155, 81, 224, 0.16) !important; }
+body.theme-dark .smm-shade-p2, .smr-root.smr-dark .smr-shade-p2 { background-color: rgba(155, 81, 224, 0.26) !important; }
+body.theme-dark .smm-shade-p3, .smr-root.smr-dark .smr-shade-p3 { background-color: rgba(155, 81, 224, 0.36) !important; }
+
+/* 마인드맵 노드 명암 상자 라운딩 */
+.smm-node.smm-has-shade {
+  border-radius: 6px !important;
+}
+
+/* 에디터 라인 명암 라운딩 및 패딩 */
+.cm-line.smm-line-shade {
+  border-radius: 4px;
+}
+
+/* 강대상 줄 명암 라운딩 및 패딩 */
+.smr-vline.smr-shade {
+  border-radius: 4px;
+  padding: 2px 6px;
+  box-sizing: border-box;
+}
+
+/* ==================== macOS Apple Pages 스타일 플로팅 인스펙터 ==================== */
+.smm-pages-inspector {
+  --pi-bg: rgba(245, 245, 247, 0.94);
+  --pi-header-bg: rgba(236, 236, 240, 0.85);
+  --pi-card-bg: #FFFFFF;
+  --pi-border: rgba(0, 0, 0, 0.11);
+  --pi-divider: rgba(0, 0, 0, 0.08);
+  --pi-text: #1D1D1F;
+  --pi-muted: #6E6E73;
+  --pi-faint: #8E8E93;
+  --pi-seg-bg: #E3E3E8;
+  --pi-seg-active: #FFFFFF;
+  --pi-seg-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+  --pi-btn-bg: #FFFFFF;
+  --pi-btn-hover: #F0F0F5;
+  --pi-btn-border: rgba(0, 0, 0, 0.14);
+  --pi-accent: #007AFF;
+  --pi-accent-soft: rgba(0, 122, 255, 0.14);
+  --pi-shadow: 0 16px 40px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.07);
+
+  position: fixed;
+  top: 58px;
+  right: 24px;
+  width: 336px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 76px);
+  z-index: 9500;
+  display: flex;
+  flex-direction: column;
+  background: var(--pi-bg);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  border: 1px solid var(--pi-border);
+  border-radius: 13px;
+  box-shadow: var(--pi-shadow);
+  color: var(--pi-text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Apple SD Gothic Neo", "Pretendard", var(--font-interface), sans-serif;
+  font-size: 12.5px;
+  user-select: none;
+  overflow: hidden;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+body.theme-dark .smm-pages-inspector {
+  --pi-bg: rgba(34, 34, 38, 0.94);
+  --pi-header-bg: rgba(44, 44, 49, 0.88);
+  --pi-card-bg: #2C2C31;
+  --pi-border: rgba(255, 255, 255, 0.14);
+  --pi-divider: rgba(255, 255, 255, 0.09);
+  --pi-text: #F2F2F7;
+  --pi-muted: #AEAEB2;
+  --pi-faint: #7C7C82;
+  --pi-seg-bg: #1C1C20;
+  --pi-seg-active: #3A3A42;
+  --pi-seg-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  --pi-btn-bg: #323238;
+  --pi-btn-hover: #3E3E46;
+  --pi-btn-border: rgba(255, 255, 255, 0.14);
+  --pi-accent: #0A84FF;
+  --pi-accent-soft: rgba(10, 132, 255, 0.22);
+  --pi-shadow: 0 18px 46px rgba(0, 0, 0, 0.58), 0 3px 12px rgba(0, 0, 0, 0.35);
+}
+
+/* 상단 타이틀 및 드래그 핸들 바 */
+.smm-pi-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px 8px;
+  background: var(--pi-header-bg);
+  border-bottom: 1px solid var(--pi-divider);
+  cursor: grab;
+  gap: 6px;
+}
+.smm-pi-header:active {
+  cursor: grabbing;
+}
+.smm-pi-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--pi-text);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.smm-pi-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 라이트/다크 전환 미니 캡슐 */
+.smm-pi-theme-switch {
+  display: inline-flex;
+  background: var(--pi-seg-bg);
+  padding: 2px;
+  border-radius: 7px;
+  gap: 2px;
+}
+.smm-pi-theme-btn {
+  border: none;
+  background: transparent;
+  color: var(--pi-muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  line-height: 1.3;
+  height: auto;
+  box-shadow: none;
+}
+.smm-pi-theme-btn.is-active {
+  background: var(--pi-seg-active);
+  color: var(--pi-text);
+  box-shadow: var(--pi-seg-shadow);
+}
+
+.smm-pi-icon-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--pi-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 13px;
+  box-shadow: none;
+}
+.smm-pi-icon-btn:hover {
+  background: var(--pi-btn-hover);
+  color: var(--pi-text);
+}
+.smm-pi-icon-btn.is-pinned {
+  color: var(--pi-accent);
+  background: var(--pi-accent-soft);
+}
+
+/* Pages 스타일 3단 세그먼트 탭 바 */
+.smm-pi-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background: var(--pi-seg-bg);
+  margin: 8px 12px 6px;
+  padding: 2.5px;
+  border-radius: 8px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.smm-pi-tab {
+  border: none;
+  background: transparent;
+  color: var(--pi-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 5px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.12s, color 0.12s;
+  height: auto;
+  box-shadow: none;
+}
+.smm-pi-tab:hover {
+  color: var(--pi-text);
+}
+.smm-pi-tab.is-active {
+  background: var(--pi-seg-active);
+  color: var(--pi-text);
+  box-shadow: var(--pi-seg-shadow);
+}
+
+/* 본문 스크롤 영역 */
+.smm-pi-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 4px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 섹션 카드 및 헤더 */
+.smm-pi-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--pi-divider);
+}
+.smm-pi-section:last-child {
+  border-bottom: none;
+  padding-bottom: 2px;
+}
+.smm-pi-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--pi-muted);
+  letter-spacing: 0.01em;
+  margin-top: 2px;
+}
+.smm-pi-sec-sub {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--pi-faint);
+}
+
+/* 행 레이아웃 */
+.smm-pi-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+}
+.smm-pi-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--pi-text);
+  flex-shrink: 0;
+}
+.smm-pi-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  margin-left: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 문단 단계 세그먼트 버튼 (본문 / H1~H6 / 인용) */
+.smm-pi-para-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.smm-pi-pill-btn {
+  height: 27px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--pi-btn-border);
+  background: var(--pi-btn-bg);
+  color: var(--pi-text);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, border-color 0.1s, transform 0.06s;
+  box-shadow: none;
+}
+.smm-pi-pill-btn:hover {
+  background: var(--pi-btn-hover);
+  border-color: var(--pi-accent);
+}
+.smm-pi-pill-btn:active {
+  transform: scale(0.97);
+}
+.smm-pi-pill-btn.is-active {
+  background: var(--pi-accent-soft);
+  border-color: var(--pi-accent);
+  color: var(--pi-accent);
+}
+
+/* 대지 기호 그리드 */
+.smm-pi-mark-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.smm-pi-hanja-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 3px;
+  max-height: 175px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--pi-seg-bg);
+  border-radius: 7px;
+  margin-top: 2px;
+}
+.smm-pi-mark-btn {
+  height: 30px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--pi-btn-border);
+  background: var(--pi-btn-bg);
+  color: var(--smm-mark-strong-color, #BF4E14);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.08s, background 0.12s, border-color 0.12s;
+  box-shadow: none;
+}
+.smm-pi-hanja-grid .smm-pi-mark-btn {
+  height: 25px;
+  font-size: 13.5px;
+}
+.smm-pi-mark-btn:hover {
+  background: var(--pi-btn-hover);
+  border-color: var(--pi-accent);
+  transform: scale(1.07);
+}
+.smm-pi-outline-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+}
+.smm-pi-outline-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--pi-muted);
+  white-space: nowrap;
+}
+.smm-pi-outline-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--pi-btn-border);
+  background: var(--pi-btn-bg);
+  color: var(--smm-mark-strong-color, #BF4E14);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.smm-pi-outline-apply {
+  height: 24px !important;
+  font-size: 11px !important;
+  padding: 0 8px !important;
+  color: var(--pi-accent) !important;
+  border-color: var(--pi-accent) !important;
+  font-weight: 700;
+}
+
+/* 단어 강조색 (==text== 형광펜) 6색 팔레트 */
+.smm-pi-hl-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 5px;
+}
+.smm-pi-hl-swatch {
+  width: 100%;
+  height: 27px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: transform 0.08s, border-color 0.12s;
+  box-shadow: none;
+}
+body.theme-dark .smm-pi-hl-swatch {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.92);
+}
+.smm-pi-hl-swatch:hover {
+  transform: scale(1.06);
+  border-color: var(--pi-accent);
+}
+.smm-pi-hl-swatch:active {
+  transform: scale(0.97);
+}
+
+/* 노드 배경 음영 6색 × 3단계 매트릭스 */
+.smm-pi-shade-matrix {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 5px;
+}
+.smm-pi-shade-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+.smm-pi-shade-col-label {
+  font-size: 10px;
+  color: var(--pi-muted);
+  font-weight: 600;
+}
+.smm-pi-shade-swatch {
+  width: 100%;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: transform 0.08s, border-color 0.12s;
+  box-shadow: none;
+}
+body.theme-dark .smm-pi-shade-swatch {
+  border-color: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.8);
+}
+.smm-pi-shade-swatch:hover {
+  transform: scale(1.06);
+  border-color: var(--pi-accent);
+}
+
+/* Pages 스타일 숫자 스테퍼 ([-] [값] [+]) */
+.smm-pi-stepper {
+  display: inline-flex;
+  align-items: center;
+  background: var(--pi-btn-bg);
+  border: 1px solid var(--pi-btn-border);
+  border-radius: 6px;
+  overflow: hidden;
+  height: 25px;
+  flex-shrink: 0;
+}
+.smm-pi-step-btn {
+  width: 22px;
+  height: 25px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--pi-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+}
+.smm-pi-step-btn:hover {
+  background: var(--pi-btn-hover);
+}
+.smm-pi-step-input {
+  width: 54px !important;
+  height: 23px !important;
+  border: none !important;
+  border-left: 1px solid var(--pi-divider) !important;
+  border-right: 1px solid var(--pi-divider) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--pi-text) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  text-align: center !important;
+  padding: 0 2px !important;
+  box-shadow: none !important;
+}
+.smm-pi-step-input::placeholder {
+  color: var(--pi-muted) !important;
+  font-weight: 500 !important;
+  font-size: 10.5px !important;
+  opacity: 0.85 !important;
+}
+
+/* 드롭다운 / 셀렉트 / 텍스트 입력 */
+.smm-pi-select {
+  height: 26px;
+  max-width: 185px;
+  padding: 0 22px 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--pi-btn-border);
+  background-color: var(--pi-btn-bg);
+  color: var(--pi-text);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.smm-pi-range {
+  width: 52px !important;
+  min-width: 0 !important;
+  max-width: 52px !important;
+  flex: 0 1 52px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  accent-color: var(--pi-accent);
+  cursor: pointer;
+}
+
+/* 컬러 웰 (Color Picker) */
+.smm-pi-color-well {
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--pi-btn-border);
+  background: transparent;
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.smm-pi-color-well::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+.smm-pi-color-well::-webkit-color-swatch {
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+/* H1~H6 컴팩트 테이블 행 */
+.smm-pi-h-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+  min-height: 26px;
+}
+.smm-pi-h-badge {
+  width: 36px;
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--pi-seg-bg);
+  text-align: center;
+}
+.smm-pi-reset-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--pi-muted);
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+  flex-shrink: 0;
+}
+.smm-pi-reset-btn:hover {
+  background: var(--pi-btn-hover);
+  color: var(--pi-text);
+}
+
+/* 성경 역본 비교 및 검색 결과: 다크 모드 장절 글자색 흰색 처리 (가독성 향상) */
+body.theme-dark .bible-compare-card-title,
+.theme-dark .bible-compare-card-title,
+body.theme-dark .bible-compare-card-title span:first-child,
+.theme-dark .bible-compare-card-title span:first-child,
+body.theme-dark .bible-search-suggestion-title,
+.theme-dark .bible-search-suggestion-title {
+  color: #ffffff !important;
+}
+
+body.theme-dark .bible-compare-card-title span[style*="text-muted"],
+.theme-dark .bible-compare-card-title span[style*="text-muted"] {
+  color: rgba(255, 255, 255, 0.72) !important;
+}
+
+/* 역본 비교 절 번호 표시 스타일 */
+.bible-compare-verse-num-ctrl {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.bible-compare-verse-num-select {
+  height: 22px;
+  padding: 0 4px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--background-modifier-border);
+  background-color: var(--background-primary);
+  color: var(--text-normal);
+  cursor: pointer;
+}
+.bible-compare-verse-num {
+  font-weight: 700;
+  font-size: 0.88em;
+  color: var(--text-accent);
+  margin-right: 1px;
+  user-select: text;
+}
+body.theme-dark .bible-compare-verse-num,
+.theme-dark .bible-compare-verse-num {
+  color: #79c0ff;
+}
+
+/* =========================================================================================
+ * 오타 자동고침 (자동 대치) 단어장 모달 스타일 (.smm-autocorrect-modal)
+ * ========================================================================================= */
+.smm-autocorrect-modal h3 {
+  margin-top: 0;
+  margin-bottom: 6px;
+}
+
+.smm-ac-toggle-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  margin-bottom: 12px;
+}
+
+.smm-ac-toggle-row {
+  display: flex;
+  align-items: center;
+}
+
+.smm-ac-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-normal);
+  cursor: pointer;
+  user-select: none;
+}
+
+.smm-ac-add-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.smm-ac-input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 13.5px;
+}
+
+.smm-ac-arrow {
+  font-weight: 700;
+  color: var(--text-muted);
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.smm-ac-add-btn {
+  height: 34px;
+  padding: 0 14px;
+  font-weight: 600;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.smm-ac-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.smm-ac-count {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.smm-ac-search {
+  width: 180px;
+  height: 28px;
+  font-size: 12px;
+  padding: 0 8px;
+  border-radius: 6px;
+}
+
+.smm-ac-list {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  padding: 4px;
+  margin-bottom: 14px;
+}
+
+.smm-ac-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.smm-ac-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: background-color 0.1s ease;
+}
+
+.smm-ac-item:hover {
+  background: var(--background-secondary);
+}
+
+.smm-ac-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.smm-ac-typo {
+  font-weight: 600;
+  color: var(--text-error);
+  font-size: 13.5px;
+  text-decoration: underline wavy rgba(255, 80, 80, 0.45);
+}
+
+.smm-ac-item-arrow {
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.smm-ac-correct {
+  font-weight: 700;
+  color: var(--text-normal);
+  font-size: 13.5px;
+}
+
+.smm-ac-del-btn {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.smm-ac-del-btn:hover {
+  color: var(--text-on-accent);
+  background: var(--background-modifier-error);
+  border-color: var(--background-modifier-error);
+}
+
+.smm-ac-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+
+
+
+
+
+/* === 하위노드(들여쓰기 있을 때, vd1~vd20) 폰트 정규화 ===
+ * 하위노드는 상위노드보다 글씨가 두꺼워지거나 커지지 않고
+ * 일반 본문 폰트(들여쓰기 있을 때, RIDIBatang 등)와 동일하게 유지
+ */
+.smr-root .smr-flow .smr-vline:not(.smr-vd0),
+.smr-root .smr-flow .smr-vline:not(.smr-vd0) .smr-vtext-cell {
+  font-family: var(--smr-font-body, inherit) !important;
+  font-size: var(--smr-size-body, inherit) !important;
+  font-weight: normal !important;
+  color: inherit !important;
+}
+
+.smr-root .smr-flow .smr-mark-sub-icon {
+  color: var(--smr-mark-color, #BF4E14);
+  display: inline-block;
+  margin-right: 0.2em;
+  font-weight: normal !important;
+  font-size: 1em !important;
+}
+
+/* =========================================================================
+ * [대지(깊이 0) vs 들여쓰기 하위노드] 글꼴 서식 분리 및 읽기/편집 모드 100% 일치
+ * 1. 대지(들여쓰기 없는 줄, ✓ 포함): Freesentation-8ExtraBold, 26px, bold
+ * 2. 탭/공백으로 들여쓰기 된 하위노드 (✓, ▶, →, ➔ 포함) 및 목록 하위 항목:
+ *    대지 폰트(프리젠테이션 8)를 절대 사용하지 않고, 일반 본문 폰트(RIDIBatang 등)와 크기로 표시
+ * ========================================================================= */
+
+/* 편집 화면에서 들여쓰기 된 줄 및 하위노드 기호(▶ 등)가 있는 줄은 본문 폰트 강제 */
+.markdown-source-view.mod-cm6 .cm-line[class*="cm-indent-"].smm-ed-vline-strong,
+.markdown-source-view.mod-cm6 .cm-line[class*="HyperMD-list-line-"].smm-ed-vline-strong:not(.HyperMD-list-line-1),
+.markdown-source-view.mod-cm6 .cm-line:has(.smm-ed-vmark-sub),
+.markdown-source-view.mod-cm6 .cm-line:has(.smm-ed-vmark-sub) * {
+  font-family: var(--font-text) !important;
+  font-weight: normal !important;
+  font-size: var(--font-text-size, 1em) !important;
+  color: var(--text-normal) !important;
+}
+
+/* 읽기 화면에서 하위 목록(li li, ul ul 등)이나 하위노드가 대지 폰트를 상속받지 않도록 차단 */
+.markdown-rendered .smm-ed-vline-strong > ul,
+.markdown-rendered .smm-ed-vline-strong > ol,
+.markdown-rendered li li,
+.markdown-rendered li li *,
+.markdown-rendered ul ul,
+.markdown-rendered ol ul,
+.markdown-rendered ul ol,
+.markdown-rendered ol ol,
+.markdown-rendered li li.smm-ed-vline-strong,
+.markdown-rendered li li .smm-rv-text-cell,
+.markdown-rendered li li .smm-rv-text-cell *,
+.smr-root .smr-flow .smr-vline:not(.smr-vd0),
+.smr-root .smr-flow .smr-vline:not(.smr-vd0) * {
+  font-family: inherit !important;
+  font-weight: normal !important;
+  font-size: inherit !important;
+  color: inherit !important;
+}
+
+/* 하위노드 기호(▶, →, ➔ 등) 아이콘 자체 크기/굵기 */
+.smm-ed-vmark.smm-ed-vmark-sub {
+  color: var(--smm-mark-sub-color, var(--smm-mark-color, #BF4E14)) !important;
+  font-weight: normal !important;
+  font-size: 1em !important;
+}
+
+/* 읽기 화면에서 하위노드 기호가 포함된 문단 및 목록 항목은 본문 폰트로 정규화 */
+.markdown-rendered p:has(.smm-ed-vmark-sub),
+.markdown-rendered p:has(.smm-ed-vmark-sub) *,
+.markdown-rendered li:has(.smm-ed-vmark-sub),
+.markdown-rendered li:has(.smm-ed-vmark-sub) *,
+.markdown-rendered .smm-ed-vmark-sub + *,
+.markdown-rendered .smm-rv-slot:has(.smm-ed-vmark-sub) + .smm-rv-text-cell,
+.markdown-rendered .smm-rv-slot:has(.smm-ed-vmark-sub) + .smm-rv-text-cell * {
+  font-family: var(--font-text) !important;
+  font-weight: normal !important;
+  font-size: var(--font-text-size, 1em) !important;
+  color: inherit !important;
+}

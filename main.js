@@ -39,6 +39,178 @@ const NEW_BODY = '새 문단';
 
 /* ================= 마크다운 구조 파서 ================= */
 
+/* ========== 노드 명암 (배경 음영) 및 줄머리 기호 상수 & 헬퍼 ========== */
+const SMM_SHADE_RE = /[ \t]*%%shade:([roygbp])([123])%%[ \t]*$/;
+
+const SMM_DOCX_SHADE_COLORS = {
+  r1: 'FDE8E8', r2: 'FCD0D0', r3: 'F9A8A8',
+  o1: 'FEEEDD', o2: 'FDDDBB', o3: 'FBC188',
+  y1: 'FFF9D1', y2: 'FFF3A3', y3: 'FFE066',
+  g1: 'DFF5E2', g2: 'BFEBC4', g3: '8FD99B',
+  b1: 'DEF0FF', b2: 'BDE0FF', b3: '8CC8FF',
+  p1: 'EEE5FF', p2: 'DCCBFF', p3: 'BFA6FF',
+};
+
+function smmGetShadeInfo(text) {
+  if (!text) return null;
+  const m = String(text).match(SMM_SHADE_RE);
+  if (!m) return null;
+  return {
+    color: m[1],
+    level: m[2],
+    token: m[0].trim(),
+    cleanText: String(text).replace(SMM_SHADE_RE, ''),
+  };
+}
+
+function smmGetDocxShadeColor(color, level) {
+  if (!color || !level) return null;
+  return SMM_DOCX_SHADE_COLORS[color + level] || null;
+}
+
+function smmEscapeRegExp(s) {
+  return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const SMM_SUB_MARKS_LIST = [
+  '→', '←', '↑', '↓', '↔', '↕', '↗', '↙', '↖', '↘', '➔', '➡', '⇒', '⇐', '⇨', '⇦'
+];
+const SMM_SUB_MARKS_SET = new Set(SMM_SUB_MARKS_LIST);
+
+const SMM_TRIANGLE_MARKS = ['▶', '▷', '◀', '◁', '▲', '△', '▼', '▽'];
+const SMM_HANJA_M_MARKS = [
+  '＃', '＆', '＊', '＠', '§', '※', '☆', '★', '○', '●',
+  '◎', '◇', '◆', '□', '■', '〓', '♤',
+  '♠', '♡', '♥', '♧', '♣', '⊙', '◈', '▣', '◐', '◑',
+  '▒', '▤', '▥', '▨', '▧', '▦', '▩', '♨', '☏', '☎',
+  '☜', '☞', '¶', '†', '‡',
+  '♭', '♩', '♪', '♬', '㉿', '㈜', '№', '㏇', '™', '㏂',
+  '㏘', '℡', '®', 'ª', 'º'
+];
+const SMM_STRONG_MARKS_LIST = ['✓', '✔'].concat(SMM_TRIANGLE_MARKS, SMM_HANJA_M_MARKS);
+const SMM_DEFAULT_STRONG_MARKS = new Set(SMM_STRONG_MARKS_LIST.concat(['v', 'V']));
+const SMM_ALL_EXPLICIT_MARKS = Array.from(new Set(SMM_STRONG_MARKS_LIST.concat(SMM_SUB_MARKS_LIST)));
+const SMM_LINE_EXPLICIT_MARK_RE = new RegExp('^([ \\t]*)([' + SMM_ALL_EXPLICIT_MARKS.map(smmEscapeRegExp).join('') + '])([ \\t]*)(.*)$');
+const SMM_EXPLICIT_NUM_MARK_RE = /^([ \t]*)(?:[✓✔][ \t]+)(\d{1,2}[.)])([ \t]+)(.*)$/;
+const SMM_KOR_OUTLINE_SEQ = '가나다라마바사아자차카타파하';
+const SMM_OUTLINE_STYLES = [
+  { id: 'num_dot',    label: '1. 2. 3.',      explicitPrefix: '✓ ' },
+  { id: 'half_paren', label: '1) 2) 3)',      explicitPrefix: '✓ ' },
+  { id: 'full_paren', label: '(1) (2) (3)',   explicitPrefix: '' },
+  { id: 'circled',    label: '① ② ③',         explicitPrefix: '' },
+  { id: 'kor_dot',    label: '가. 나. 다.',   explicitPrefix: '' },
+  { id: 'kor_paren',  label: '(가) (나) (다)', explicitPrefix: '' },
+  { id: 'kor_half',   label: '가) 나) 다)',   explicitPrefix: '' },
+  { id: 'cap_alpha',  label: 'A. B. C.',      explicitPrefix: '' },
+  { id: 'low_alpha',  label: 'a. b. c.',      explicitPrefix: '' },
+];
+
+function smmIsOutlineMarkToken(markChar) {
+  if (!markChar) return false;
+  return /^(?:\d{1,2}[.)]|\(\d{1,2}\)|[①-⑳]|[가나다라마바사아자차카타파하][.)]|\([가나다라마바사아자차카타파하]\)|[A-Za-z]\.)$/.test(String(markChar));
+}
+
+function smmIsWideMark(markChar) {
+  const s = String(markChar || '');
+  return s.length > 1 || /^[①-⑳]$/.test(s);
+}
+
+function smmParseOutlinePrefix(rawBody) {
+  if (!rawBody) return null;
+  const s = String(rawBody);
+  if (typeof smmIsVerseEditorLine === 'function' && smmIsVerseEditorLine(s)) return null;
+  let m;
+  if ((m = s.match(/^([①-⑳])([ \t]*)(.+)$/))) {
+    return { family: 'circled', mark: m[1], rawLen: m[1].length + m[2].length, body: m[3], ordinal: m[1].charCodeAt(0) - 0x2460 + 1 };
+  }
+  if ((m = s.match(/^(\(\d{1,2}\))([ \t]+)(.+)$/))) {
+    return { family: 'full_paren', mark: m[1], rawLen: m[1].length + m[2].length, body: m[3], ordinal: parseInt(m[1].slice(1, -1), 10) };
+  }
+  if ((m = s.match(/^(\([가나다라마바사아자차카타파하]\))([ \t]+)(.+)$/))) {
+    return { family: 'kor_paren', mark: m[1], rawLen: m[1].length + m[2].length, body: m[3], ordinal: SMM_KOR_OUTLINE_SEQ.indexOf(m[1][1]) + 1 };
+  }
+  if ((m = s.match(/^([가나다라마바사아자차카타파하]\.)([ \t]+)(.+)$/))) {
+    return { family: 'kor_dot', mark: m[1], rawLen: m[1].length + m[2].length, body: m[3], ordinal: SMM_KOR_OUTLINE_SEQ.indexOf(m[1][0]) + 1 };
+  }
+  if ((m = s.match(/^([가나다라마바사아자차카타파하]\))([ \t]+)(.+)$/))) {
+    return { family: 'kor_half', mark: m[1], rawLen: m[1].length + m[2].length, body: m[3], ordinal: SMM_KOR_OUTLINE_SEQ.indexOf(m[1][0]) + 1 };
+  }
+  if ((m = s.match(/^([A-Z]\.)([ \t]+)(.+)$/)) && !/^[A-Z]\./.test(m[3])) {
+    return { family: 'cap_alpha', mark: m[1], rawLen: m[1].length + m[2].length, body: m[3], ordinal: m[1].charCodeAt(0) - 64 };
+  }
+  if ((m = s.match(/^([a-z]\.)([ \t]+)(.+)$/)) && !/^[a-z]\./.test(m[3])) {
+    return { family: 'low_alpha', mark: m[1], rawLen: m[1].length + m[2].length, body: m[3], ordinal: m[1].charCodeAt(0) - 96 };
+  }
+  return null;
+}
+
+function smmFormatOutlineToken(styleId, index1Based) {
+  const n = Math.max(1, Number(index1Based) || 1);
+  switch (styleId) {
+    case 'num_dot': return `${n}.`;
+    case 'half_paren': return `${n})`;
+    case 'full_paren': return `(${n})`;
+    case 'circled': return n <= 20 ? String.fromCharCode(0x2460 + n - 1) : `(${n})`;
+    case 'kor_dot': return `${SMM_KOR_OUTLINE_SEQ[(n - 1) % SMM_KOR_OUTLINE_SEQ.length]}.`;
+    case 'kor_paren': return `(${SMM_KOR_OUTLINE_SEQ[(n - 1) % SMM_KOR_OUTLINE_SEQ.length]})`;
+    case 'kor_half': return `${SMM_KOR_OUTLINE_SEQ[(n - 1) % SMM_KOR_OUTLINE_SEQ.length]})`;
+    case 'cap_alpha': return `${String.fromCharCode(65 + ((n - 1) % 26))}.`;
+    case 'low_alpha': return `${String.fromCharCode(97 + ((n - 1) % 26))}.`;
+    default: return `${n}.`;
+  }
+}
+
+function smmParseExplicitMarkLine(line) {
+  if (!line) return null;
+  const s = String(line);
+  const nm = s.match(SMM_EXPLICIT_NUM_MARK_RE);
+  if (nm) {
+    const indent = nm[1];
+    const mark = nm[2];
+    const body = nm[4] || '';
+    const rawLen = s.length - indent.length - body.length;
+    const family = mark.endsWith(')') ? 'half_paren' : 'num_dot';
+    const ordinal = parseInt(mark, 10) || 1;
+    return { indent, mark, body, rawLen, explicitNum: true, family, ordinal };
+  }
+  const m = s.match(SMM_LINE_EXPLICIT_MARK_RE);
+  if (!m) return null;
+  const indent = m[1];
+  const mark = m[2];
+  const trailingWs = m[3] || '';
+  const body = m[4] || '';
+  const rawLen = mark.length + trailingWs.length;
+  return { indent, mark, body, rawLen };
+}
+
+function smmGetLineMarks(cfg) {
+  return [
+    (cfg && cfg.markStrongIcon) || '✓',
+    (cfg && cfg.markMidIcon) || 'ㆍ',
+    (cfg && cfg.markSubIcon) || '-',
+  ];
+}
+
+function smmIsStrongMark(ch, cfg) {
+  if (!ch) return false;
+  const markChar = typeof ch === 'object' ? ch.mark : ch;
+  if (SMM_SUB_MARKS_SET.has(markChar)) return false;
+  if (smmIsOutlineMarkToken(markChar)) return true;
+  const target = (cfg && cfg.markStrongIcon) || '✓';
+  if (markChar === target) return true;
+  return SMM_DEFAULT_STRONG_MARKS.has(markChar);
+}
+
+function smmHangCharsFor(markCh, isNumbered, cfg) {
+  if (!markCh) return 0;
+  const ch = typeof markCh === 'object' ? markCh.mark : markCh;
+  if (isNumbered) return Math.max(1.7, String(ch).length * 0.72);
+  if (smmIsOutlineMarkToken(ch)) return Math.max(1.5, String(ch).length * 0.72);
+  if (smmIsStrongMark(ch, cfg)) return 1.0;
+  if (ch === '-') return 1.1;
+  return 1.0;
+}
+
 function indentWidth(s) {
   let w = 0;
   for (const ch of s) w += ch === '\t' ? 4 : 1;
@@ -81,14 +253,18 @@ function parseDoc(text) {
     while (b >= a && buf.arr[b].trim() === '') b--;
     if (a <= b) {
       const ind = (buf.arr[a].match(/^[ \t]*/) || [''])[0];
+      const rawBodyText = buf.arr.slice(a, b + 1).map((l) => (l.startsWith(ind) ? l.slice(ind.length) : l)).join('\n');
+      const sm = smmGetShadeInfo(rawBodyText);
+      const nodeText = sm ? sm.cleanText : rawBodyText;
       const node = {
         kind: 'body',
-        text: buf.arr.slice(a, b + 1).map((l) => (l.startsWith(ind) ? l.slice(ind.length) : l)).join('\n'),
+        text: nodeText,
         bodyIndent: ind,
         line: buf.start + a,
         endLine: buf.start + b,
         children: [], parent: buf.container, headingLevel: 99,
       };
+      if (sm) node.shade = { color: sm.color, level: sm.level, token: sm.token };
       buf.container.children.push(node);
       all.push(node);
       lastBody = node;
@@ -140,7 +316,10 @@ function parseDoc(text) {
         headingStack.pop();
       }
       const parent = headingStack[headingStack.length - 1];
-      const node = { kind: 'heading', headingLevel: level, text: m[2].trim(), line: i, children: [], parent };
+      const sm = smmGetShadeInfo(m[2]);
+      const nodeText = (sm ? sm.cleanText : m[2]).trim();
+      const node = { kind: 'heading', headingLevel: level, text: nodeText, line: i, children: [], parent };
+      if (sm) node.shade = { color: sm.color, level: sm.level, token: sm.token };
       parent.children.push(node);
       all.push(node);
       headingStack.push(node);
@@ -179,10 +358,13 @@ function parseDoc(text) {
           ? listStack[listStack.length - 1].node
           : headingStack[headingStack.length - 1];
       }
+      const sm = smmGetShadeInfo(m[3]);
+      const nodeText = (sm ? sm.cleanText : m[3]).trim();
       const node = {
-        kind: 'list', indentStr, bullet: m[2], text: m[3].trim(),
+        kind: 'list', indentStr, bullet: m[2], text: nodeText,
         line: i, children: [], parent, headingLevel: 99,
       };
+      if (sm) node.shade = { color: sm.color, level: sm.level, token: sm.token };
       parent.children.push(node);
       all.push(node);
       listStack.push({ w, node });
@@ -479,16 +661,21 @@ function collapseBlankRuns(lines, trackLine) {
 
 /** 노드의 '자기 줄'을 다른 텍스트로 다시 쓴 결과 (종류/접두사/들여쓰기는 유지) */
 function ownLinesFor(node, text) {
+  const shadeSuffix = (node && node.shade && node.shade.token) ? (' ' + node.shade.token) : '';
   if (node.kind === 'heading') {
     const t = text.split('\n').map((s) => s.trim()).filter(Boolean).join('<br>');
-    return ['#'.repeat(node.headingLevel) + ' ' + t];
+    return ['#'.repeat(node.headingLevel) + ' ' + t + shadeSuffix];
   }
   if (node.kind === 'list') {
     const t = text.split('\n').map((s) => s.trim()).filter(Boolean).join('<br>');
-    return [node.indentStr + node.bullet + ' ' + t];
+    return [node.indentStr + node.bullet + ' ' + t + shadeSuffix];
   }
   const ind = node.bodyIndent || '';
-  return text.split('\n').map((l) => (l.trim() === '' ? '' : ind + l));
+  const lines = text.split('\n').map((l) => (l.trim() === '' ? '' : ind + l));
+  if (shadeSuffix && lines.length > 0) {
+    lines[lines.length - 1] += shadeSuffix;
+  }
+  return lines;
 }
 
 /**
@@ -827,7 +1014,9 @@ const DEFAULT_SETTINGS = {
   docxColorH6: M_COLOR_H6,
   docxFontVerse: M_FONT_VERSE,
   docxSizeVerse: '', // pt. 비어있으면 '기본 글자 크기'를 그대로 씀 (기존 동작)
-  docxColorVerse: M_COLOR_VERSE,
+  docxColorVerse: '000000',
+  docxColorQuote: '00558A',
+  docxSyncVerseColor: false,
   docxBaseSizePt: 12,
   docxOutputFolder: '', // 비어있으면 원본 설교문과 같은 폴더에 저장 (기존 동작) — 보관함(vault) 안의 폴더
   docxEmbedFonts: true, // 보관함 글꼴 폴더의 .ttf 글꼴을 워드 원고에 포함 (설치돼 있지 않은 컴퓨터에서도 보이게)
@@ -843,17 +1032,41 @@ const DEFAULT_SETTINGS = {
   mmClampBody: '', // 미리보기 줄 수, 비어있으면 8(기존)
   mmWidthVerse: '', // px, 비어있으면 420(기존)
   mmClampVerse: '', // 미리보기 줄 수, 비어있으면 8(기존)
+  // 설교문(편집) 화면 — 기본 본문 크기, 글자 행간 및 줄/항목 간 여백
+  edSizeBody: '',   // 기본 본문 글자 크기 px (비어있으면 옵시디언 기본 크기)
+  edLineHeight: '', // 전체 글자 행간 배율 (비어있으면 기본값 1.75)
+  edParaGap: '',    // 줄/항목 간 여백 px (비어있으면 기본 간격)
   // 설교문(편집) 화면에서도 성경구절 줄에 전용 글꼴을 입힐지
   edVerseFont: true,
   edVerseSize: '', // px, 비어있으면 편집기 기본 크기 그대로
+  // 설교문(편집) 화면 — 성경구절 및 인용문(>) 글자 색상 (비어있으면 테마 기본)
+  edColorVerse: '',
+  edColorDarkVerse: '',
+  edColorQuote: '',
+  edColorDarkQuote: '',
+  // 설교문(편집) 화면 — 제목 1~6단계 크기(px) 및 색상 (기본값: heading-colors 스니펫 및 마인드맵과 동일)
+  edSizeH1: '', edSizeH2: '', edSizeH3: '', edSizeH4: '', edSizeH5: '', edSizeH6: '',
+  edColorH1: M_COLOR_H1, edColorH2: M_COLOR_H2, edColorH3: M_COLOR_H3, edColorH4: M_COLOR_H4, edColorH5: M_COLOR_H5, edColorH6: M_COLOR_H6,
+  edColorDarkH1: M_COLOR_H_DARK[0], edColorDarkH2: M_COLOR_H_DARK[1], edColorDarkH3: M_COLOR_H_DARK[2], edColorDarkH4: M_COLOR_H_DARK[3], edColorDarkH5: M_COLOR_H_DARK[4], edColorDarkH6: M_COLOR_H_DARK[5],
+  // 다른 모드에서 "편집 화면 색상과 일치" 연동 옵션
+  mmSyncColors: true,     // 마인드맵: 편집 화면 색상과 일치
+  rdSyncVerseColor: false, // 강대상: 성경/인용 색상을 편집 화면과 일치
+  rdSyncHeadColor: false,  // 강대상: 제목 색상을 편집 화면과 일치
+  docxSyncColors: false,   // 워드: 제목/성경구절 색상을 편집 화면(밝은 테마)과 일치
   // 편집 화면에서, 몸말 줄 앞에 "설교문 미리보기"와 같은 깊이 표시(✓/-)를 보여줄지
   edShowVMark: true,
   edMarkSize: '', // px, 비어있으면 기본 크기(0.85em 상당) 그대로
+  // 줄머리 기호 모양 (대지·소지·세부)
+  markStrongIcon: '✓',            // 0단계 대지 줄 아이콘 (✓, ●, ◆, ■, ▶, ★, ◎ 등)
+  markMidIcon: 'ㆍ',              // 1단계 소지 줄 아이콘
+  markSubIcon: '-',              // 2단계 세부 줄 아이콘
+  outlineMarkStyle: 'num_dot',    // 숫자·글머리 대지 기본 선택 스타일 ('num_dot', 'half_paren', 'full_paren', 'circled', 'kor_dot', ...)
   // 들여쓰기 없는(0단계) 줄의 ✓ 표시 — 편집 화면·옵시디언 읽기 보기·마인드맵, 이
   // 세 곳에 함께 적용됨(같은 노트를 "쓰거나 훑어볼 때" 보는 화면들이라 통일함).
   // "설교문 읽기 모드(강대상)"는 아래 rdMark*로 따로 커스텀함 — 실제 설교 때 쓰는
   // 화면이라 서식(글꼴/크기 등)을 독립적으로 맞출 수 있어야 하기 때문.
   markStrongColor: 'BF4E14',      // ✓ 아이콘 자체 색
+  markStrongLightTextColor: '',   // ✓ 표시가 붙은 줄 전체를 물들이는 색(라이트 모드 전용, 비어있으면 본문 기본색)
   markStrongTextColor: 'E8D9A0',  // ✓ 표시가 붙은 줄 전체를 물들이는 색(다크 모드 전용, 기존 동작 그대로)
   // ✓ 아이콘 자체 크기는 더는 따로 설정할 수 없다(배율 설정 삭제 — "v 기호크기
   // 배율은 지워" 요청) — styles.css가 항상 1.1em(기존 기본값)을 그대로 쓴다.
@@ -867,6 +1080,18 @@ const DEFAULT_SETTINGS = {
   hanjaStyle: 'hanja',            // 'hanja' = 한자만(교회 → 敎會) / 'paren' = 한글(한자)(교회 → 교회(敎會))
   hanjaRemember: true,            // 고른 한자를 기억해 다음번에 맨 앞 후보로 보여줌
   hanjaPicks: {},                 // 기억한 선택 { 낱말: 한자 }
+  // ---- 오타 자동고침 (자동 대치) ----
+  edAutocorrectEnabled: true,     // 편집 화면 및 마인드맵 노드 입력 중 오타 자동고침 사용 여부
+  edAutocorrectPrefixMatch: true, // 어절 앞부분 + 조사 결합 시에도 자동고침 (예: 하난미께서 → 하나님께서)
+  edAutocorrectRules: {
+    '하난미': '하나님',
+    '하나님게서': '하나님께서',
+    '예수님게서': '예수님께서',
+    '성령님게서': '성령님께서',
+    '그리소도': '그리스도',
+    '할레루야': '할렐루야',
+    '예루살램': '예루살렘',
+  },
   // ---- 설교문 읽기 모드(강대상용) ----
   rdTheme: '자동',      // 자동(옵시디언 테마 따름) / 밝게 / 어둡게
   rdFontBody: '',       // 비어있으면 옵시디언 본문 글꼴
@@ -889,6 +1114,7 @@ const DEFAULT_SETTINGS = {
   rdMargin: 24,         // px 페이지 여백
   rdMaxWidth: 1300,     // px 글줄 최대 폭 (0이면 화면 전체)
   rdVerseFont: true,    // 성경구절에 "성경구절 폰트"를 함께 쓰기
+  rdScroll: false,      // 위아래 스크롤 모드(장 나누지 않고 쭉 보기)
   rdAnim: true,         // 넘길 때 밀리는 움직임
   rdShowPage: true,     // 아래쪽 쪽 표시
   rdLockDrawer: true,   // 읽기 모드에서 좌우로 밀 때 옆 서랍(사이드바)이 딸려 나오지 않게
@@ -916,6 +1142,9 @@ const DEFAULT_SETTINGS = {
   // 미리 반영해 뒀다 — 그래야 컴퓨터(위쪽 자체 표시줄이 거의 없음)에서
   // "기기 미리보기"로 봐도 실제 아이패드에서 보이는 쪽수·여백과 맞는다.
   rdFixedH: 1086,
+  bibleDataDownloadUrl: 'https://github.com/hyod9866/ObsidianSermonMindmap/releases/download/v0.19.0/sermon_bible_data.zip',
+  geminiApiKey: '',     // 구글 AI 스튜디오 무료 Gemini API 키 (이미지 OCR용)
+  ocrPrompt: '',        // OCR 맞춤 프롬프트 (비어있으면 기본 성경/설교 특화 프롬프트 사용)
 };
 
 const M_COLORS = {
@@ -1095,17 +1324,26 @@ function smrSplitPTailToFit(el, budgetH) {
   let n;
   while (!overflowed && (n = walker.nextNode())) {
     const text = n.nodeValue || '';
-    if (!text) continue;
+    if (!text.trim()) continue;
     const wsRe = /\s+/g;
     const offs = [];
     let m;
     while ((m = wsRe.exec(text))) offs.push(m.index + m[0].length);
     if (!offs.length || offs[offs.length - 1] !== text.length) offs.push(text.length);
+    let prevOff = 0;
     for (const off of offs) {
-      if (off <= 0) continue;
-      range.setStart(el, 0);
+      if (off <= prevOff) continue;
+      if (!text.slice(prevOff, off).trim()) { prevOff = off; continue; }
+      // range.setStart(el, 0)처럼 문단 맨 앞부터 잡으면, 줄마다 감싼 inline-table(.smr-vline)의
+      // table-cell(.smr-vtext-cell) 경계를 넘나들 때 브라우저(Chromium/WebKit)가 그 안의 줄바꿈을
+      // 무시하고 표 칸 전체의 맨 아래(bottom)를 돌려주는 버그가 있다. 그래서 단어 하나(prevOff~off)만
+      // 콕 집어 그 단어가 놓인 줄의 실제 아래쪽 위치를 재서 비교한다.
+      range.setStart(n, prevOff);
       range.setEnd(n, off);
-      const h = range.getBoundingClientRect().bottom - elTop;
+      const rc = range.getBoundingClientRect();
+      prevOff = off;
+      if (rc.height <= 0) continue;
+      const h = rc.bottom - elTop;
       if (h <= fitH) {
         best = { node: n, offset: off };
       } else {
@@ -1117,6 +1355,12 @@ function smrSplitPTailToFit(el, budgetH) {
     }
   }
   if (!best) return null; // 첫 단어부터 이미 넘침 — 자를 자리를 못 찾음
+
+  // 나중에 창 크기가 바뀌어 layout()이 다시 돌 때 원래 한 문단으로 되돌릴 수 있도록
+  // 처음 쪼개기 직전의 원본 HTML을 기억해 둔다.
+  if (!el.hasAttribute('data-smr-orig-html')) {
+    el.setAttribute('data-smr-orig-html', el.innerHTML);
+  }
 
   // 꼬리(나머지)를 el과 똑같은 모양(같은 태그·클래스)의 새 요소로 미리
   // 통째로 복제해 두고, best가 가리키는 자리를 이 복제본 쪽에서도 찾는다
@@ -1130,6 +1374,8 @@ function smrSplitPTailToFit(el, budgetH) {
     }
   }
   const tailEl = el.cloneNode(true);
+  tailEl.removeAttribute('data-smr-orig-html');
+  tailEl.setAttribute('data-smr-ptail', '1');
   let tailNode = tailEl;
   for (const idx of path) tailNode = tailNode.childNodes[idx];
 
@@ -1142,10 +1388,23 @@ function smrSplitPTailToFit(el, budgetH) {
   smrTrimBefore(tailNode, tailEl);
 
   // 꼬리 맨 앞에 내용 없이 남은 껍데기(앞 줄의 빈 표시 칸 + 줄바꿈)는 치운다 — 안 그러면
-  // 다음 장 맨 위가 빈 줄로 시작한다.
+  // 다음 장 맨 위가 빈 줄이나 글자 없는 표시(✓/ㆍ/-)로 시작한다.
   while (tailEl.firstChild) {
     const f = tailEl.firstChild;
-    const empty = f.nodeType === 1 && (f.tagName === 'BR' || (!(f.textContent || '').trim() && !(f.querySelector && f.querySelector('img'))));
+    let empty = false;
+    if (f.nodeType === 3) {
+      empty = !(f.nodeValue || '').trim();
+    } else if (f.nodeType === 1) {
+      if (f.tagName === 'BR') {
+        empty = true;
+      } else if (f.classList && f.classList.contains('smr-vline')) {
+        const tc = f.querySelector('.smr-vtext-cell');
+        const checkEl = tc || f;
+        empty = !(checkEl.textContent || '').trim() && !(checkEl.querySelector && checkEl.querySelector('img'));
+      } else {
+        empty = !(f.textContent || '').trim() && !(f.querySelector && f.querySelector('img'));
+      }
+    }
     if (!empty) break;
     tailEl.removeChild(f);
   }
@@ -1155,11 +1414,28 @@ function smrSplitPTailToFit(el, budgetH) {
   return tailEl;
 }
 
+/** 이전 layout() 호출에서 smrSplitPTailToFit로 갈라 놓은 문단(<p>) 조각들을
+ *  다시 원래 한 문단으로 되돌린다. */
+function smrDefragParagraphs(topItems) {
+  const out = [];
+  for (const el of topItems) {
+    if (el && el.nodeType === 1 && el.getAttribute('data-smr-ptail') === '1') {
+      continue;
+    }
+    if (el && el.nodeType === 1 && el.hasAttribute('data-smr-orig-html')) {
+      el.innerHTML = el.getAttribute('data-smr-orig-html');
+      el.removeAttribute('data-smr-orig-html');
+    }
+    out.push(el);
+  }
+  return out;
+}
+
 /**
  * 마인드맵 화면에서 "이 컴퓨터에 설치된 글꼴"을 한글 전용 별칭(@font-face)으로
  * 감싸 쓰기 위한 이름표. 역할(본문/제목/성경구절)마다 하나씩 고정된 이름을 씀.
  */
-const SMM_LOCAL_FONT_ALIAS = { body: 'smm-body-local', head: 'smm-head-local', verse: 'smm-verse-local', rdbody: 'smr-body-local', rdhead: 'smr-head-local', rdverse: 'smr-quote-local', rdmarkline: 'smr-markline-local' };
+const SMM_LOCAL_FONT_ALIAS = { body: 'smm-body-local', head: 'smm-head-local', verse: 'smm-verse-local', markline: 'smm-markline-local', rdbody: 'smr-body-local', rdhead: 'smr-head-local', rdverse: 'smr-quote-local', rdmarkline: 'smr-markline-local' };
 
 /**
  * 일부 글꼴 파일은 실제로는 한글 글자 모양을 갖고 있는데도, 파일 내부의 "지원 문자
@@ -1173,12 +1449,13 @@ function smmLocalFontFaceCss(role, fontName) {
   if (!n) return '';
   const aliasName = SMM_LOCAL_FONT_ALIAS[role];
   if (!aliasName) return '';
-  const esc = n.replace(/"/g, '\\"');
+  const vars = smmFontNameVariants(n);
+  const src = vars.map((v) => `local("${v.replace(/"/g, '\\"')}")`).join(', ');
   // 문자 범위에 "기본 라틴"(U+0020-007E: 숫자, 괄호, 콜론, 하이픈, 영문)도 반드시 포함해야 함.
   // 이게 빠져 있으면 "(창 26:14-15)"에서 한글 '창'만 설정한 글꼴로 나오고 숫자/괄호/콜론은
   // 기본 글꼴로 나와서, 한 줄 안에서 글꼴이 섞여 보이는 문제가 생김.
   // (범위에 넣어도 그 글꼴에 해당 글자가 실제로 없으면 브라우저가 알아서 다음 글꼴로 넘어가므로 안전함)
-  return `@font-face{font-family:"${aliasName}";src:local("${esc}");` +
+  return `@font-face{font-family:"${aliasName}";src:${src};` +
     'unicode-range:U+0020-007E,U+00A0-00FF,U+2000-206F,U+20A0-20BF,U+2100-214F,' +
     'U+AC00-D7A3,U+1100-11FF,U+3130-318F,U+A960-A97F,U+D7B0-D7FF,U+3000-303F,U+FF00-FFEF;}';
 }
@@ -1235,7 +1512,7 @@ function smmProbeThemeHeaderMetrics() {
   try {
     if (typeof document !== 'undefined' && document.body) {
       const holder = document.createElement('div');
-      holder.className = 'markdown-reading-view markdown-preview-view markdown-rendered';
+      holder.className = 'markdown-reading-view markdown-preview-view markdown-rendered smm-probe-holder';
       holder.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:200px;height:0;overflow:hidden;visibility:hidden;pointer-events:none;';
       const els = {};
       for (let lv = 1; lv <= 6; lv++) {
@@ -1277,12 +1554,48 @@ function smmFontKey(n) { return String(n || '').toLowerCase().replace(/[\s\-_]+/
 function smmFontNameVariants(name) {
   const n = String(name || '').trim();
   if (!n) return [];
-  const out = [n];
+  const set = new Set([n]);
   const k = smmFontKey(n);
   for (const b of SMM_BUNDLED_FONT_NAMES) {
-    if (b !== n && smmFontKey(b) === k) out.push(b);
+    if (smmFontKey(b) === k) set.add(b);
   }
-  return out;
+  // Freesentation 계열 자동 확장 (윈도우 설치 이름, 맥/아이패드 번들 이름 양방향 매칭)
+  const freeM = n.match(/^(?:Freesentation|프리젠테이션)[-\s]*(\d+)?(?:[-\s]*([a-zA-Z가-힣]+))?/i);
+  if (freeM) {
+    const num = freeM[1] || '';
+    const weight = freeM[2] || '';
+    if (num && weight) {
+      set.add(`Freesentation-${num}${weight}`);
+      set.add(`Freesentation ${num} ${weight}`);
+      set.add(`프리젠테이션 ${num} ${weight}`);
+    }
+    if (num) {
+      set.add(`Freesentation ${num}`);
+      set.add(`프리젠테이션 ${num}`);
+      set.add(`Freesentation-${num}`);
+    }
+    set.add('Freesentation');
+    set.add('프리젠테이션');
+  }
+  // Paperlogy 계열 자동 확장
+  const paperM = n.match(/^(?:Paperlogy|페이퍼로지)[-\s]*(\d+)?(?:[-\s]*([a-zA-Z가-힣]+))?/i);
+  if (paperM) {
+    const num = paperM[1] || '';
+    const weight = paperM[2] || '';
+    if (num && weight) {
+      set.add(`Paperlogy-${num}${weight}`);
+      set.add(`Paperlogy ${num} ${weight}`);
+      set.add(`페이퍼로지 ${num} ${weight}`);
+    }
+    if (num) {
+      set.add(`Paperlogy ${num}`);
+      set.add(`페이퍼로지 ${num}`);
+      set.add(`Paperlogy-${num}`);
+    }
+    set.add('Paperlogy');
+    set.add('페이퍼로지');
+  }
+  return Array.from(set);
 }
 /** CSS font-family에 넣을 따옴표 친 이름 목록 ("A", "A-번들이름") */
 function smmFontNameList(name) {
@@ -1376,7 +1689,7 @@ function escXml(s) {
 
 /* ========== 인라인 파싱 → 런 ========== */
 
-const INLINE_RX = /(\*\*[^*]+\*\*|==[^=\n]+==|<u>[\s\S]*?<\/u>|~~[^~\n]+~~|<font\s+color="[^"]+">[\s\S]*?<\/font>|\{[가-힣a-zA-Z]+:[^}\n]+\}|(?<!\[)\[[^\[\]\n]+\](?!\(|\])|<br\s*\/?>|`[^`\n]+`)/g;
+const INLINE_RX = /(\*\*[^*]+\*\*|==[^=\n]+==|<u>[\s\S]*?<\/u>|~~[^~\n]+~~|<font\s+color="[^"]+">[\s\S]*?<\/font>|\{[가-힣a-zA-Z]+:[^}\n]+\}|\[\[[^\[\]\n]+\]\]|\[[^\[\]\n]+\](?!\(|\])|<br\s*\/?>|`[^`\n]+`)/g;
 
 function parseInlineRuns(text, base) {
   const runs = [];
@@ -1421,6 +1734,8 @@ function parseInlineRuns(text, base) {
       const key = tok.slice(1, i).toLowerCase();
       const color = M_COLORS[key] || M_COLORS[tok.slice(1, i)];
       runs.push(...parseInlineRuns(tok.slice(i + 1, -1), Object.assign({}, base, { color: color || (base && base.color) })));
+    } else if (tok.startsWith('[[')) {
+      runs.push(Object.assign({}, base, { text: tok }));
     } else if (tok.startsWith('[')) {
       runs.push(Object.assign({}, base, { text: tok, highlight: 'yellow' }));
     } else if (tok.startsWith('<br')) {
@@ -1451,10 +1766,29 @@ function runXml(r, cfg) {
 
 /* ========== 문단/블록 ========== */
 
+function smmDocxSpacing(cfg) {
+  const lineMultiplier = smmNumOr(cfg && (cfg.edLineHeight || cfg.rdLineHeight), 1.15);
+  const lineTwip = Math.round(240 * lineMultiplier);
+  let afterTwip = 120;
+  if (cfg && smmNumOr(cfg.edParaGap, 0) > 0) {
+    // V 항목 전용 여백이 설정된 경우 문서 기본 문단 여백은 0으로 두고 V 항목에서만 afterTwip을 지정
+    afterTwip = 0;
+  } else if (cfg && smmNumOr(cfg.rdParaGap, 0) > 0) {
+    const basePt = smmNumOr(cfg.docxBaseSizePt, 12);
+    afterTwip = Math.round(basePt * smmNumOr(cfg.rdParaGap, 0) * 20);
+  }
+  return { lineTwip, afterTwip };
+}
+
 function paraXml(runs, opts, cfg) {
   const o = opts || {};
   const pr = [];
-  pr.push('<w:spacing w:line="276" w:lineRule="auto" w:after="120"/>');
+  const sp = smmDocxSpacing(cfg);
+  const afterVal = o.afterTwip != null ? o.afterTwip : sp.afterTwip;
+  pr.push(`<w:spacing w:line="${sp.lineTwip}" w:lineRule="auto" w:after="${afterVal}"/>`);
+  if (o.shadeColor) {
+    pr.push(`<w:shd w:val="clear" w:color="auto" w:fill="${o.shadeColor}"/>`);
+  }
   if (o.indentChars || o.hangChars) {
     // 들여쓰기는 "트윕(twip) 길이"만으로 적는다. (예전에는 w:leftChars/w:hangingChars —
     // "글자 단위" 값 — 도 함께 적었는데, 워드는 글자 단위 값이 있으면 그쪽을 우선하면서
@@ -1478,12 +1812,14 @@ function paraXml(runs, opts, cfg) {
   return `<w:p><w:pPr>${pr.join('')}</w:pPr>${runsXml}</w:p>`;
 }
 
-/** 성경 구절 문단인지 (장절 표기로 시작하거나 > 인용) */
+/** 성경 구절 문단인지 (장절 표기로 시작하거나 > 인용, 앞쪽에 [개역개정] 등 역본명이 붙은 경우 포함) */
 function isVerseLine(t) {
-  const s = t.trim();
+  let s = t.trim();
   if (s.startsWith('>')) return true;
-  return /^\(?[1-3]?[가-힣]{1,6}(리아서|가복음|도행전)?\s?\d{1,3}\s?[::]\s?\d/.test(s) ||
-    /^\([1-3]?[가-힣a-zA-Z]{1,10}\s?\d{1,3}\s?[::]\s?\d/.test(s);
+  s = s.replace(/^(?:\[[^\]\n]+\]\s*)+/, '').trim();
+  if (s.startsWith('>')) return true;
+  return /^\(?[1-3]?[가-힣]{1,10}(?:[1-3]서|리아서|가복음|도행전)?\s*\d{1,3}\s*[:：]\s*\d/.test(s) ||
+    /^\([1-3]?[가-힣a-zA-Z]{1,10}\s*\d{1,3}\s*[:：]\s*\d/.test(s);
 }
 
 /**
@@ -1507,7 +1843,7 @@ function isVerseNodeText(text) {
  * 때만 대상으로 삼는다 — "설교문 읽기 모드"/"마인드맵 화면"/"편집 화면" 세
  * 곳에서 이 표시를 옅은 배지(smm-verse-ref)로 강조하는 데 함께 쓰는 정규식.
  */
-const SMR_VERSE_REF_RE = /\([1-3]?[가-힣]{1,6}(?:리아서|가복음|도행전)?\s?\d{1,3}\s?[:：]\s?\d{1,3}(?:[-~–]\d{1,3})?\)/g;
+const SMR_VERSE_REF_RE = /\([1-3]?[가-힣a-zA-Z]{1,10}(?:[1-3]서|리아서|가복음|도행전)?\s*\d{1,3}\s*[:：]\s*\d{1,3}(?:\s*[-~–,]\s*\d{1,3})*\)/g;
 
 /**
  * 위 SMR_VERSE_REF_RE에 걸리는 "(책 장:절)" 표시를 <span class="smm-verse-ref">로
@@ -1548,7 +1884,10 @@ function smmWrapVerseRefBadges(text) {
  *   수 있다.
  */
 function smmWrapVerseRefBadgesQuoteSafe(text) {
-  const s = String(text == null ? '' : text);
+  let s = String(text == null ? '' : text);
+  // 줄 맨 앞의 `>`와 탭/공백을 깔끔하게 `> `로 통일해
+  // 탭이나 4칸 공백으로 인한 인덴트 코드 블록(<pre><code>) 오인식을 막는다.
+  s = s.replace(/^[ \t]*>[ \t]*/, '> ');
   if (s.indexOf('<') === -1) {
     return s.replace(SMR_VERSE_REF_RE, (m) => '==' + m + '==');
   }
@@ -1639,8 +1978,11 @@ function verseBoxXml(paras) {
  *  워드에서 이 NBSP가 훨씬 넓게 그려져 표시와 글자가 너무 멀어 보였다
  *  (손으로 지우고 스페이스를 한 번 치면 좁아짐). 워드의 자동 글머리 변환은
  *  "- "·"1. "처럼 하이픈/번호 뒤 공백에서 일어나므로, 그런 표시만 계속 NBSP를 쓴다. */
-function smmMarkGap(markCh) {
-  return (markCh === '\u2713' || markCh === '\u318d') ? ' ' : '\u00a0';
+function smmMarkGap(markCh, cfg) {
+  if (!markCh) return ' ';
+  if (/^(?:\d{1,2}[.)]|[A-Za-z가-하][.)])$/.test(String(markCh))) return '\u00a0';
+  if (smmIsStrongMark(markCh, cfg) || markCh === '\u2713' || markCh === 'ㆍ' || markCh === '\u318d') return ' ';
+  return '\u00a0';
 }
 
 function buildBody(root, cfg) {
@@ -1664,44 +2006,73 @@ function buildBody(root, cfg) {
   const HEAD_COLOR_DEFAULT = [M_COLOR_H1, M_COLOR_H2, M_COLOR_H3, M_COLOR_H4, M_COLOR_H5, M_COLOR_H6];
   const headColorFor = (level) => {
     const lvl = Math.max(1, Math.min(6, Number(level) || 1));
+    if (c.docxSyncColors) {
+      const edH = smmHexOr(c['edColorH' + lvl], '');
+      if (edH) return edH;
+    }
     return smmHexOr(c['docxColorH' + lvl], HEAD_COLOR_DEFAULT[lvl - 1]);
   };
   const verseSizeHalfPt = Math.round(smmNumOr(c.docxSizeVerse, baseSizePt) * 2);
 
+  const docxVerseSync = smmHexOr(c.edColorVerse, '');
+  const docxQuoteSync = smmHexOr(c.edColorQuote, '');
+  const syncVerse = !!(c.docxSyncVerseColor || (c.docxSyncColors && c.docxSyncVerseColor !== false));
+  const docxVerseColor = syncVerse
+    ? (docxVerseSync || bodyColor)
+    : smmHexOr(c.docxColorVerse, bodyColor);
+  const docxQuoteColor = syncVerse
+    ? (docxQuoteSync || docxVerseColor)
+    : smmHexOr(c.docxColorQuote, '00558A');
   const bodyBase = { color: bodyColor, size: bodySizeHalfPt };
-  const verseBase = { font: c.docxFontVerse, color: c.docxColorVerse, bold: true, size: verseSizeHalfPt };
+  const verseBase = { font: c.docxFontVerse, color: docxVerseColor, bold: true, size: verseSizeHalfPt };
+  const quoteBase = { font: c.docxFontVerse, color: docxQuoteColor, bold: true, size: verseSizeHalfPt };
 
-  const emitBodyText = (text, depth) => {
+  const emitBodyText = (text, depth, shade) => {
     const lines = text.split('\n');
     for (const ln of lines) {
       if (ln.trim() === '') continue;
+      const isQuote = /^>\s?/.test(ln.trim());
       const verse = isVerseLine(ln);
       const clean = ln.replace(/^>\s?/, '');
-      // "설교문 미리보기"·편집 화면과 똑같이(SMR_LINE_MARKS), 목록 기호 없이
-      // 깊이만 있는 몸말 줄 앞에 깊이 0은 ✓, 깊이 1은 ㆍ, 그 이상은 -를 붙여서
+      // "설교문 미리보기"·편집 화면과 똑같이(smmGetLineMarks), 목록 기호 없이
+      // 깊이만 있는 몸말 줄 앞에 깊이 0은 대지(✓), 깊이 1은 소지(ㆍ), 그 이상은 세부(-)를 붙여서
       // 단계를 한눈에 보여준다. (첫 제목 앞의 0단계 성경 구절 — 본문 말씀 줄 — 은
       // 미리보기와 똑같이 표시를 붙이지 않는다.) 표시 뒤에는 보통 스페이스가
       // 아니라 줄바꿈 없는 공백(NBSP)을 쓰는데, "- " (하이픈+스페이스)로
       // 시작하면 워드가 저절로 ● 글머리 목록으로 바꿔 버리는 문제가 있었기
       // 때문이다(예전에 목록 항목에서 이미 겪은 문제) — NBSP는 화면에는
       // 스페이스와 똑같이 보이면서 그 자동 변환은 일으키지 않는다. 워드는
-      // 본문 전체가 기본으로 굵게(bold) 나오므로(runXml 참고), ✓ 표시도 따로
+      // 본문 전체가 기본으로 굵게(bold) 나오므로(runXml 참고), 대지 표시도 따로
       // 손대지 않아도 이미 굵게 보인다.
       const skipMark = depth === 0 && verse;
-      const markCh = skipMark ? '' : SMR_LINE_MARKS[Math.min(depth, SMR_LINE_MARKS.length - 1)];
-      const markedClean = markCh ? (markCh + smmMarkGap(markCh) + clean) : clean;
-      const lineBase = verse ? Object.assign({}, verseBase) : Object.assign({}, bodyBase);
-      // "✓ 줄 글자 폰트"(설교문 미리보기 설정)가 있으면 ✓ 줄에만 그 글꼴을 쓴다
-      if (!verse && markCh === SMR_LINE_MARKS[0] && c.docxFontMarkLine) lineBase.font = c.docxFontMarkLine;
+      const marks = smmGetLineMarks(c);
+      const explicit = smmParseExplicitMarkLine(clean);
+      const outlineM = (!explicit && depth === 0 && !verse && !isQuote) ? smmParseOutlinePrefix(clean) : null;
+      const markCh = explicit ? explicit.mark : (outlineM ? outlineM.mark : (skipMark ? '' : marks[Math.min(depth, marks.length - 1)]));
+      const cleanBody = explicit ? explicit.body : (outlineM ? outlineM.body : clean);
+      const markedClean = markCh ? (markCh + smmMarkGap(markCh, c) + cleanBody) : cleanBody;
+      let lineBase;
+      if (isQuote) {
+        lineBase = Object.assign({}, quoteBase);
+      } else if (verse) {
+        lineBase = Object.assign({}, verseBase);
+      } else {
+        lineBase = Object.assign({}, bodyBase);
+      }
+      // "대지 줄 글자 폰트"(설교문 미리보기 설정)가 있으면 대지 줄에만 그 글꼴을 쓴다
+      if (!verse && !isQuote && depth === 0 && smmIsStrongMark(markCh, c) && c.docxFontMarkLine) lineBase.font = c.docxFontMarkLine;
       const runs = parseInlineRuns(markedClean, lineBase);
-      // 표시(✓/ㆍ/-)가 있는 줄은 그 표시+공백이 차지하는 폭만큼 매달린 들여쓰기를
+      // 표시가 있는 줄은 그 표시+공백이 차지하는 폭만큼 매달린 들여쓰기를
       // 줘서, 문장이 길어 줄바꿈돼도 이어지는 줄이 표시 옆 글자 시작 위치에 맞춰지게
-      // 한다("v/점/- 옆에 정렬" 요청 — 편집 화면·읽기 모드·마인드맵과 같은 원리).
-      // ㆍ(1단계)는 자리가 맞다는 피드백이 있어 그대로 두고, ✓와 "-"(2단계 이상)는
-      // 더 넓게 잡는다("체크랑 -는 마진 안 맞아, 더 들어가").
-      // 표시(✓/ㆍ/-)+공백이 실제로 차지하는 폭(글자 수) — 이어지는 줄을 글자 시작 위치에 맞춘다
-      const hangChars = !markCh ? 0 : markCh === SMR_LINE_MARKS[0] ? 1.0 : markCh === '-' ? 1.1 : 1.0;
-      const xml = paraXml(runs, { indentChars: depth, hangChars }, c);
+      // 한다(smmHangCharsFor).
+      const hangChars = !markCh ? 0 : smmHangCharsFor(markCh, false, c);
+      // 대지(체크 등) 항목 아래에만 사용자가 지정한 여백(edParaGap)을 주고, 나머지 줄은 기본 여백(또는 0) 유지
+      let afterTwip = undefined;
+      if (c && smmNumOr(c.edParaGap, 0) > 0) {
+        afterTwip = smmIsStrongMark(markCh, c) ? Math.round(smmNumOr(c.edParaGap, 0) * 15) : 0;
+      }
+      const shadeColor = shade ? smmGetDocxShadeColor(shade.color, shade.level) : null;
+      const xml = paraXml(runs, { indentChars: depth, hangChars, afterTwip, shadeColor }, c);
       if (verse && !boxedFirstVerse && !sawHeading) {
         // 첫 제목이 나오기 전의 첫 성경 구절 = 본문 말씀 박스
         boxedFirstVerse = true;
@@ -1722,7 +2093,10 @@ function buildBody(root, cfg) {
         // 보면(특히 "- " 목록과 맞물려) ■나 ● 같은 기호·도형이 자꾸 저절로
         // 끼어드는 문제가 있어서 더 이상 붙이지 않는다 — 제목 글자 그대로 낸다.
         const runs = parseInlineRuns(t, { font: c.docxFontHead, bold: true, size, color: headColorFor(child.headingLevel) });
-        blocks.push('<w:p><w:pPr><w:spacing w:before="240" w:line="276" w:lineRule="auto" w:after="160"/></w:pPr>' +
+        const sp = smmDocxSpacing(c);
+        const shadeHex = child.shade ? smmGetDocxShadeColor(child.shade.color, child.shade.level) : null;
+        const shdTag = shadeHex ? `<w:shd w:val="clear" w:color="auto" w:fill="${shadeHex}"/>` : '';
+        blocks.push(`<w:p><w:pPr><w:spacing w:before="240" w:line="${sp.lineTwip}" w:lineRule="auto" w:after="${Math.round(sp.afterTwip * 1.3)}"/>${shdTag}</w:pPr>` +
           runs.map((r) => runXml(r, c)).join('') + '</w:p>');
         walk(child, 0);
       } else if (child.kind === 'body') {
@@ -1734,8 +2108,8 @@ function buildBody(root, cfg) {
         // 직접 재서 4칸 = 1단계로 깊이를 구한다(smrPreserveLineBreaks의 emitPlain과
         // 동일한 기준). 진짜 목록(-, * 등) 밑에 딸린 줄이면 여기 오지 않고 아래
         // 'list' 분기로 가므로, 이 계산은 목록 중첩 깊이와 서로 섞이지 않는다.
-        const lineDepth = Math.floor(indentWidth(child.bodyIndent || '') / 4);
-        emitBodyText(child.text, lineDepth);
+        const lineDepth = Math.max(depth, Math.floor(indentWidth(child.bodyIndent || '') / 4));
+        emitBodyText(child.text, lineDepth, child.shade);
         walk(child, lineDepth + 1);
       } else if (child.kind === 'list') {
         const verse = isVerseLine(child.text);
@@ -1745,29 +2119,45 @@ function buildBody(root, cfg) {
         // 실제 글머리 기호(브라우저가 그려 주는 점)가 보이지만, 워드 문서에는
         // 그런 자동 글머리 기호를 넣지 않다 보니 목록 항목만 유독 몸말 줄과 달리
         // 깊이 표시가 하나도 안 붙는 문제가 있었다. 목록 항목에도 몸말 줄
-        // (emitBodyText)과 똑같은 규칙(SMR_LINE_MARKS)으로 깊이 0은 ✓, 깊이
-        // 1은 ㆍ, 그 이상은 -를 붙여서, 목록으로 쓰든 탭으로 쓰든 워드에서
+        // (emitBodyText)과 똑같은 규칙(smmGetLineMarks)으로 깊이 0은 대지, 깊이
+        // 1은 소지, 그 이상은 세부를 붙여서, 목록으로 쓰든 탭으로 쓰든 워드에서
         // 항상 깊이가 보이게 한다. 단, 편집 화면에서 탭으로 들여써 옵시디언이
         // 저절로 번호(1. 2. 3. ...)를 매긴 목록은, 깊이와 상관없이 마인드맵·
         // 설교문 미리보기와 똑같이 그 번호를 그대로 쓴다.
         const skipMark = depth === 0 && verse;
         const isNumbered = /^\d+[.)]$/.test(child.bullet || '');
-        const markCh = skipMark ? '' : (isNumbered ? child.bullet : SMR_LINE_MARKS[Math.min(depth, SMR_LINE_MARKS.length - 1)]);
+        const marks = smmGetLineMarks(c);
+        const markCh = skipMark ? '' : (isNumbered ? child.bullet : marks[Math.min(depth, marks.length - 1)]);
+        const shadeColor = child.shade ? smmGetDocxShadeColor(child.shade.color, child.shade.level) : null;
         lines.forEach((ln) => {
           if (ln.trim() === '') return;
-          const base = verse ? Object.assign({}, verseBase) : Object.assign({}, bodyBase);
-          if (!verse && markCh === SMR_LINE_MARKS[0] && c.docxFontMarkLine) base.font = c.docxFontMarkLine;
+          const isQuote = /^>\s?/.test(ln.trim()) || /^>\s?/.test((child.text || '').trim());
+          let base;
+          if (isQuote) {
+            base = Object.assign({}, quoteBase);
+          } else if (verse) {
+            base = Object.assign({}, verseBase);
+          } else {
+            base = Object.assign({}, bodyBase);
+          }
           const clean = ln.replace(/^>\s?/, '');
+          const explicit = smmParseExplicitMarkLine(clean);
+          const lineMarkCh = explicit ? explicit.mark : markCh;
+          const cleanBody = explicit ? explicit.body : clean;
+          if (!verse && !isQuote && depth === 0 && smmIsStrongMark(lineMarkCh, c) && c.docxFontMarkLine) base.font = c.docxFontMarkLine;
           // 예전에는 줄 맨 앞에 "- "(하이픈+스페이스)를 붙였는데, 워드가 그걸 보고
           // 자동으로 ● 글머리 목록(도형)으로 바꿔 버리는 경우가 있었다. 표시 뒤에
           // 줄바꿈 없는 공백(NBSP)을 쓰면 화면엔 스페이스처럼 보이면서도 그 자동
           // 변환을 일으키지 않는다(emitBodyText와 동일한 방식).
-          const markedClean = markCh ? (markCh + smmMarkGap(markCh) + clean) : clean;
+          const markedClean = lineMarkCh ? (lineMarkCh + smmMarkGap(lineMarkCh, c) + cleanBody) : cleanBody;
           const runs = parseInlineRuns(markedClean, base);
-          // 몸말 줄(emitBodyText)과 똑같이 매달린 들여쓰기를 준다("v/점/- 옆에 정렬").
-          // 번호 목록(1. 2. …)은 자릿수가 늘어날 수 있어 넉넉한 폭을 쓴다.
-          const hangChars = !markCh ? 0 : isNumbered ? 1.7 : markCh === SMR_LINE_MARKS[0] ? 1.0 : markCh === '-' ? 1.1 : 1.0;
-          blocks.push(paraXml(runs, { indentChars: depth, hangChars }, c));
+          // 몸말 줄(emitBodyText)과 똑같이 매달린 들여쓰기를 준다(smmHangCharsFor).
+          const hangChars = !lineMarkCh ? 0 : smmHangCharsFor(lineMarkCh, isNumbered, c);
+          let afterTwip = undefined;
+          if (c && smmNumOr(c.edParaGap, 0) > 0) {
+            afterTwip = smmIsStrongMark(lineMarkCh, c) ? Math.round(smmNumOr(c.edParaGap, 0) * 15) : 0;
+          }
+          blocks.push(paraXml(runs, { indentChars: depth, hangChars, afterTwip, shadeColor }, c));
         });
         walk(child, depth + 1);
       }
@@ -1980,13 +2370,14 @@ function buildManuscriptDocx(root, cfg, docTitle) {
     field('NUMPAGES') +
     '</w:p></w:ftr>';
 
+  const docxSp = smmDocxSpacing(c);
   const stylesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
     '<w:docDefaults><w:rPrDefault><w:rPr>' +
     `<w:rFonts w:ascii="${escXml(c.docxFontBody)}" w:eastAsia="${escXml(c.docxFontBody)}" w:hAnsi="${escXml(c.docxFontBody)}"/>` +
     `<w:b/><w:sz w:val="${baseHalfPt}"/><w:szCs w:val="${baseHalfPt}"/><w:lang w:val="en-US" w:eastAsia="ko-KR"/>` +
     '</w:rPr></w:rPrDefault>' +
-    '<w:pPrDefault><w:pPr><w:spacing w:line="276" w:lineRule="auto" w:after="120"/></w:pPr></w:pPrDefault>' +
+    `<w:pPrDefault><w:pPr><w:spacing w:line="${docxSp.lineTwip}" w:lineRule="auto" w:after="${docxSp.afterTwip}"/></w:pPr></w:pPrDefault>` +
     '</w:docDefaults></w:styles>';
 
   const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -2511,7 +2902,13 @@ class SermonMindmapView extends TextFileView {
    *  붙였는지·굵은 ✓인지를 { added, strong }에 채워 준다 — attach()가 이 값을 보고
    *  el에 매달린 들여쓰기 class(smm-li-mark/-strong)를 미리 달아 두기 위해서다. */
   displaySource(node, markInfo) {
-    let s = node.text;
+    let s = String(node.text == null ? '' : node.text);
+    if (!s.includes('```')) {
+      // 마인드맵 노드 안에서는 우발적인 탭/공백 들여쓰기가 마크다운 렌더러에 의해
+      // "인덴트 코드 블록(<pre><code>)"(회색 복사 상자)으로 오해석되는 것을 방지
+      s = s.replace(/^[ \t]+(?=>)/gm, ''); // `>` 앞의 불필요한 들여쓰기 제거
+      s = s.replace(/^([ \t]*>[ \t]*)/gm, '> '); // `>` 뒤의 탭/공백을 단일 공백으로 통일
+    }
     if (node.kind !== 'body') {
       // 목록(list) 노드의 글이 실제로 ">"로 시작하는 성경구절 인용이면(예: 목록
       // 항목 안에 "- >(마 6:1-2)…"처럼 직접 인용 부호를 쓴 경우), 몸말(body) 노드의
@@ -2519,7 +2916,7 @@ class SermonMindmapView extends TextFileView {
       // 표시를 붙이거나(예: "· >…") ">"를 이스케이프하면(예: "\> …") ">"가 더는
       // 줄 맨 앞이 아니게 되어 옵시디언이 진짜 <blockquote>로 못 그려 주고, 그러면
       // ".smm-node.smm-verse:has(blockquote)" 노란 인용 표시(왼쪽 테두리)도 꺼진다.
-      const isRealQuote = node.kind === 'list' && /^>/.test(s);
+      const isRealQuote = node.kind === 'list' && /^[ \t]*>/.test(s);
       if (isRealQuote) {
         s = smmWrapVerseRefBadgesQuoteSafe(s);
       } else {
@@ -2544,8 +2941,9 @@ class SermonMindmapView extends TextFileView {
             // 그대로 표시로 쓴다 — 실제 순서가 있는 목록이라 뭉뚱그리면 순서가 안 보였다.
             markText = node.bullet.replace(/([.)])$/, '\\$1');
           } else {
-            markCh = smmListNodeMarkChar(node);
-            if (markCh === SMR_LINE_MARKS[0]) {
+            markCh = smmListNodeMarkChar(node, this.plugin ? this.plugin.settings : null);
+            const nodeDepth = smmNodeDepth(node);
+            if (nodeDepth === 0 && smmIsStrongMark(markCh, this.plugin ? this.plugin.settings : null)) {
               markText = markCh;
               isStrongListMark = true;
             } else if (markCh === '-') {
@@ -2579,20 +2977,15 @@ class SermonMindmapView extends TextFileView {
       }
     } else {
       // 본문(body) 노드: 이 노드 자신이 이미 마인드맵에서 부모 아래 딸린 상자
-      // 하나로 하이어라키를 나타내고 있으므로(선으로 이어진 자식 노드), 그
-      // 상자 밖 원래 탭 들여쓰기(bodyIndent — 이 노드가 어느 부모 밑에 달릴지
-      // 정하는 데만 쓰였던 값)를 상자 안 표시에 또 반영하면 같은 단계 차이가
-      // 두 번(상자 중첩 + 안쪽 여백) 보여서 불필요하게 들여써 보인다. 그래서
-      // 편집 화면·설교문 미리보기·워드 내보내기와 달리, 마인드맵 노드 안에서는
-      // bodyIndent를 다시 붙이지 않고 이 노드 자신의 글(node.text, 이미 그
-      // bodyIndent가 공통으로 떨어져 나간 상태)만으로 깊이를 잰다 — 그러면 이
-      // 노드의 첫 줄은 항상 0단계(✓)로 상자 안에 딱 붙고, 한 노드 글 안에서
-      // 더 들여쓴 줄이 있을 때만(예: 같은 노드 안 두 번째 줄부터 더 깊이 쓴
-      // 경우) 그만큼만 ㆍ/-로 내려간다.
-      s = smmMarkNodeBodyLines(s);
+      // 하나로 하이어라키를 나타내고 있으므로(선으로 이어진 자식 노드), 상자 안쪽
+      // 여백(smm-node-vdN)에는 원래 탭 들여쓰기(bodyIndent)를 다시 더하지 않고,
+      // 앞에 붙는 깊이 표시(✓/ㆍ/-)만 목록 노드와 똑같이 구조적 깊이(smmNodeDepth)와
+      // 탭 깊이 중 큰 값(baseDepth)을 기준으로 맞춘다.
+      const baseDepth = Math.max(smmNodeDepth(node), Math.floor(indentWidth(node.bodyIndent || '') / 4));
+      s = smmMarkNodeBodyLines(s, baseDepth, this.plugin ? this.plugin.settings : null);
     }
-    // [대괄호 강조] — 에디터에서 쓰시는 표기를 노란색으로
-    s = s.replace(/(?<!\[)\[([^\[\]()\s][^\[\]()]*)\](?!\(|\])/g, '<span class="smm-bracket">[$1]</span>');
+    // [대괄호 강조] — 에디터(링크/강조)와 동일한 표기 강조 (대괄호는 흐리게, 안쪽 글자는 강조색)
+    s = s.replace(/(^|[^\[])\[([^\[\]\n\r]+)\](?!\(|\])/g, '$1<span class="smm-bracket"><span class="smm-bracket-edge" style="color:var(--text-faint,#9ca3af)!important;opacity:0.7!important;font-weight:normal!important;">[</span><span class="smm-bracket-text" style="color:var(--text-accent)!important;font-weight:600!important;">$2</span><span class="smm-bracket-edge" style="color:var(--text-faint,#9ca3af)!important;opacity:0.7!important;font-weight:normal!important;">]</span></span>');
     return s;
   }
 
@@ -2610,6 +3003,43 @@ class SermonMindmapView extends TextFileView {
     } catch (e) {
       el.textContent = fallbackText;
     }
+    // 사용자가 명시적으로 ``` 코드블록을 작성한 것이 아닌데
+    // 들여쓰기(탭/4칸 공백)로 인해 옵시디언이 <pre><code>(회색 복사 상자)로
+    // 렌더링해버린 경우, 정상적인 인라인 문단/인용문으로 구출 복원한다.
+    try {
+      const srcHasFence = typeof src === 'string' && src.includes('```');
+      if (!srcHasFence) {
+        const pres = el.querySelectorAll('pre');
+        for (let i = 0; i < pres.length; i++) {
+          const pre = pres[i];
+          const code = pre.querySelector('code');
+          const rawCode = (code ? code.textContent : pre.textContent) || '';
+          const trimmed = rawCode.trim();
+          const isQuote = /^\s*>/.test(trimmed) || /^\s*>/.test(src || '') || /^\s*>/.test(fallbackText || '') || !!pre.closest('blockquote') || el.classList.contains('smm-verse') || el.classList.contains('smm-quote');
+          if (isQuote) {
+            const bq = pre.closest('blockquote') || document.createElement('blockquote');
+            const p = document.createElement('p');
+            const cleanText = rawCode.replace(/^\s*>[ \t]?/gm, '');
+            p.innerHTML = renderInline(cleanText);
+            if (pre.closest('blockquote')) {
+              pre.parentNode.replaceChild(p, pre);
+            } else {
+              bq.appendChild(p);
+              pre.parentNode.replaceChild(bq, pre);
+            }
+          } else {
+            const p = document.createElement('p');
+            p.innerHTML = renderInline(rawCode);
+            pre.parentNode.replaceChild(p, pre);
+          }
+        }
+      }
+    } catch (e) { /* 무시 */ }
+    if (el.querySelector('blockquote') || /^\s*>/.test(src || '') || /^\s*>/.test(fallbackText || '')) {
+      el.classList.add('smm-quote');
+    }
+    try { smmPaintReadingVerseRefs(el); } catch (e) { /* 무시 */ }
+    try { smmFixReadingHighlightSpacing(el); } catch (e) { /* 무시 */ }
     try { smmNormalizeColorMarks(el); smmStyleHighlights(el); } catch (e) { /* 강조 색 입히기 실패는 무시 */ }
   }
 
@@ -2646,6 +3076,9 @@ class SermonMindmapView extends TextFileView {
       if ((node.kind === 'body' || node.kind === 'list') && node.text && isVerseNodeText(node.text)) {
         kindCls += ' smm-verse';
       }
+      if ((node.kind === 'body' || node.kind === 'list') && node.text && /^[ \t]*>/m.test(node.text)) {
+        kindCls += ' smm-quote';
+      }
       // displaySource()를 el 생성 전에 먼저 계산해서, 목록(list) 노드 맨 앞에 ✓/ㆍ/-
       // (또는 번호) 표시를 붙였는지 미리 알아낸다 — 알면 el에 매달린 들여쓰기
       // class(smm-li-mark/-strong)를 처음부터 달아 둘 수 있다(문장이 길어 줄바꿈돼도
@@ -2658,9 +3091,10 @@ class SermonMindmapView extends TextFileView {
           kindCls += markInfo.strong ? ' smm-li-mark-strong' : markInfo.dash ? ' smm-li-mark-dash' : ' smm-li-mark';
         }
       }
+      const shadeCls = node.shade ? (' smm-has-shade smm-shade-' + node.shade.color + node.shade.level) : '';
       const el = this.nodesEl.createDiv({
         cls: 'smm-node smm-depth-' + Math.min(depth, 3) + kindCls +
-          (node.path === this.selectedPath ? ' smm-selected' : ''),
+          (node.path === this.selectedPath ? ' smm-selected' : '') + shadeCls,
       });
       if (depth === 0) {
         el.textContent = node.text;
@@ -3334,6 +3768,17 @@ class SermonMindmapView extends TextFileView {
       .onClick(() => this.plugin.exportManuscript()));
     if (node.kind !== 'root') {
       menu.addSeparator();
+      menu.addItem((i) => i.setTitle('노드 배경 음영 (명암)...').setIcon('palette')
+        .onClick(() => {
+          new SmmShadeModal(this.app, (color, level) => {
+            this.setNodeShade(node, color, level);
+          }).open();
+        }));
+      if (node.shade) {
+        menu.addItem((i) => i.setTitle('노드 배경 음영 지우기').setIcon('x')
+          .onClick(() => this.setNodeShade(node, null, null)));
+      }
+      menu.addSeparator();
       menu.addItem((i) => i.setTitle('수정 (더블클릭)').setIcon('pencil')
         .onClick(() => this.startEdit(node)));
       menu.addItem((i) => i.setTitle('삭제 (Del)').setIcon('trash')
@@ -3341,6 +3786,21 @@ class SermonMindmapView extends TextFileView {
     }
     if (typeof MouseEvent !== 'undefined' && e instanceof MouseEvent) menu.showAtMouseEvent(e);
     else menu.showAtPosition({ x: e.clientX, y: e.clientY });
+  }
+
+  /** 노드 배경 음영(명암) 지정/해제 */
+  setNodeShade(node, color, level) {
+    if (!node || node.kind === 'root') return;
+    const lines = this.doc.lines.slice();
+    const targetLine = (node.kind === 'body' && node.endLine != null) ? node.endLine : node.line;
+    if (targetLine < 0 || targetLine >= lines.length) return;
+    const clean = lines[targetLine].replace(SMM_SHADE_RE, '');
+    if (color && level) {
+      lines[targetLine] = clean + ` %%shade:${color}${level}%%`;
+    } else {
+      lines[targetLine] = clean;
+    }
+    this.applyLines(lines, { selectLine: node.line });
   }
 
   /** 노드를 제목 레벨 lv로 (0 = 제목 해제 → 본문) */
@@ -3369,13 +3829,15 @@ class SermonMindmapView extends TextFileView {
         ? t.slice(pre.length, t.length - post.length)
         : pre + t + post;
     const lines = this.doc.lines.slice();
+    const shadeSuffix = (node && node.shade && node.shade.token) ? (' ' + node.shade.token) : '';
     if (node.kind === 'body') {
       const ind = node.bodyIndent || '';
       const cnt = node.endLine - node.line + 1;
-      lines.splice(node.line, cnt,
-        ...node.text.split('\n').map((l) => (l.trim() === '' ? '' : ind + wrapText(l))));
+      const splitted = node.text.split('\n').map((l) => (l.trim() === '' ? '' : ind + wrapText(l)));
+      if (shadeSuffix && splitted.length > 0) splitted[splitted.length - 1] += shadeSuffix;
+      lines.splice(node.line, cnt, ...splitted);
     } else {
-      lines[node.line] = linePrefix(node) + wrapText(node.text);
+      lines[node.line] = linePrefix(node) + wrapText(node.text) + shadeSuffix;
     }
     this.applyLines(lines, { selectLine: node.line });
   }
@@ -3413,7 +3875,7 @@ class SermonMindmapView extends TextFileView {
     // 안전장치: 맨 앞이 Bible Finder 가 실제로 성경 장절로 인정하는 경우에만 지우고,
     //   그냥 글(예: "오늘 3월 모임 안내")이면 지우지 않고 예전처럼 동작한다.
     if (text.indexOf('\n') === -1) {
-      const lead = text.match(/^(\s*)((?:[\(\[\{])?([가-힣a-zA-Z0-9]{1,6})\s*(\d+)(?:[:：](\d+)(?:-(\d+))?)?(?:[\)\]\}])?)/);
+      const lead = text.match(/^(\s*(?:>\s*)?)((?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3}(?:\s*[-~–]\s*\d{1,3}|\s*,\s*\d{1,3})*))?(?:[\)\]\}>])?)/);
       if (lead && text.slice(lead[0].length).trim() !== '') {
         const refOnly = lead[2];
         let repl = null;
@@ -3533,7 +3995,7 @@ class SermonMindmapView extends TextFileView {
       return;
     }
     const text = String(target.text || '').replace(/<br\s*\/?>/gi, ' ');
-    const regex = /(?:[\(\[\{])?([가-힣a-zA-Z0-9]{1,6})\s*(\d+)(?:[:：](\d+))?(?:[\)\]\}])?/;
+    const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3})(?:\s*[-~–,]\s*\d{1,3})*)?(?:[\)\]\}>])?/;
     const match = text.match(regex);
     if (!match) {
       new Notice('가지 안에서 성경 장절(예: 마 18:15)을 찾지 못했습니다.');
@@ -3711,7 +4173,7 @@ class SermonMindmapView extends TextFileView {
       if (!view || !view.plugin || !view.plugin.settings.strongAutoSync) return;
 
       const text = String(node.text || '').replace(/<br\s*\/?>/gi, ' ');
-      const regex = /(?:[\(\[\{])?([가-힣a-zA-Z0-9]{1,6})\s*(\d+)(?:[:：](\d+))?(?:[\)\]\}])?/;
+      const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3})(?:\s*[-~–,]\s*\d{1,3})*)?(?:[\)\]\}>])?/;
       const match = text.match(regex);
       if (match) {
         const ref = match[0];
@@ -4101,6 +4563,7 @@ class SermonMindmapView extends TextFileView {
         return;
       }
 
+      const shadeSuffix = (node && node.shade && node.shade.token) ? (' ' + node.shade.token) : '';
       if (isBody) {
         if (raw === node.text) { 
           this.renderMap(); 
@@ -4108,20 +4571,27 @@ class SermonMindmapView extends TextFileView {
           return; 
         }
         const ind = node.bodyIndent || '';
-        lines.splice(node.line, cnt, ...raw.split('\n').map((l) => (l.trim() === '' ? '' : ind + l)));
+        const cleanRaw = raw.replace(/^[ \t]*>[ \t]*/gm, '> ');
+        const splitted = cleanRaw.split('\n').map((l) => (l.trim() === '' ? '' : (/^>/.test(l) ? l : ind + l)));
+        if (shadeSuffix && splitted.length > 0) {
+          splitted[splitted.length - 1] += shadeSuffix;
+        }
+        lines.splice(node.line, cnt, ...splitted);
         this.applyLines(lines, { selectLine: node.line, addSibling: addSib });
         return;
       }
 
       // 목록 항목: 여러 줄이면 <br>로 한 줄 유지 (Alt+Enter 줄바꿈)
-      const t = raw.split('\n').map((s) => s.replace(/\s+/g, ' ').trim()).filter(Boolean).join('<br>');
+      let t = raw.split('\n').map((s) => s.replace(/\s+/g, ' ').trim()).filter(Boolean).join('<br>');
+      t = t.replace(/^[ \t]*>[ \t]*/, '> ');
       if (t === node.text) { 
         this.renderMap(); 
         if (addSib) this.addSibling(node);
         return; 
       }
-      lines[node.line] = linePrefix(node) + t;
+      lines[node.line] = linePrefix(node) + t + shadeSuffix;
       this.applyLines(lines, { selectLine: node.line, addSibling: addSib });
+      return;
     };
     const cancel = () => {
       if (done) return;
@@ -4260,6 +4730,16 @@ class SermonMindmapView extends TextFileView {
         commit();
       }
       else if (e.key === 'Escape') { e.preventDefault(); this.pendingBible = false; cancel(); }
+    });
+    inp.addEventListener('input', (e) => {
+      try {
+        const it = String(e.inputType || '');
+        if (it.startsWith('delete') || it.startsWith('history')) return;
+        const d = String(e.data || '');
+        if (d && /^[\s\u00A0.,?!;:)\]]$/.test(d.slice(-1))) {
+          setTimeout(() => smmTryAutocorrectContentEditable(this.plugin, inp), 10);
+        }
+      } catch (err) { /* 무시 */ }
     });
     inp.addEventListener('blur', () => { if (this._suspendBlurCommit) return; commit(); });
   }
@@ -4405,6 +4885,11 @@ class StrongDiagModal extends Modal {
   }
   onClose() {
     this.contentEl.empty();
+    try {
+      if (this.plugin && this.plugin.pagesInspector && this.plugin.pagesInspector.isOpen()) {
+        this.plugin.pagesInspector.renderBody();
+      }
+    } catch (e) { /* 무시 */ }
   }
 }
 
@@ -4551,6 +5036,1843 @@ function smmListSystemFonts() {
   }
   const list = Array.from(names).sort((a, b) => a.localeCompare(b, 'ko'));
   return list;
+}
+
+/** 노드 배경 음영 (명암 6색 × 3단계) 선택 모달 */
+class SmmShadeModal extends Modal {
+  constructor(app, onPick) {
+    super(app);
+    this.onPick = onPick;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl('h3', { text: '노드 배경 음영 (명암)' });
+
+    const desc = contentEl.createEl('p', {
+      text: '원하는 배경색과 단계를 선택하세요. (워드·마인드맵·강대상·편집화면에 동일하게 적용됩니다)',
+    });
+    desc.style.cssText = 'color: var(--text-muted); font-size: 13px; margin-bottom: 16px;';
+
+    const colors = [
+      { key: 'y', name: '노랑', levels: ['#FFF9D1', '#FFF3A3', '#FFE066'] },
+      { key: 'o', name: '주황', levels: ['#FEEEDD', '#FDDDBB', '#FBC188'] },
+      { key: 'r', name: '빨강', levels: ['#FDE8E8', '#FCD0D0', '#F9A8A8'] },
+      { key: 'g', name: '초록', levels: ['#DFF5E2', '#BFEBC4', '#8FD99B'] },
+      { key: 'b', name: '파랑', levels: ['#DEF0FF', '#BDE0FF', '#8CC8FF'] },
+      { key: 'p', name: '보라', levels: ['#EEE5FF', '#DCCBFF', '#BFA6FF'] },
+    ];
+
+    const grid = contentEl.createDiv();
+    grid.style.cssText = 'display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px;';
+
+    for (const c of colors) {
+      for (let lvl = 1; lvl <= 3; lvl++) {
+        const hex = c.levels[lvl - 1];
+        const btn = grid.createEl('button');
+        btn.textContent = `${c.name} ${lvl}단계`;
+        btn.style.cssText = `background-color: ${hex} !important; color: #111 !important; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; padding: 12px 6px; font-size: 13px; font-weight: 600; cursor: pointer; text-align: center;`;
+        btn.onclick = () => {
+          this.onPick(c.key, String(lvl));
+          this.close();
+        };
+      }
+    }
+
+    const clearRow = contentEl.createDiv();
+    clearRow.style.cssText = 'display: flex; justify-content: flex-end; gap: 8px;';
+    const clearBtn = clearRow.createEl('button', { text: '음영 지우기 (해제)' });
+    clearBtn.onclick = () => {
+      this.onPick(null, null);
+      this.close();
+    };
+    const cancelBtn = clearRow.createEl('button', { text: '취소' });
+    cancelBtn.onclick = () => this.close();
+  }
+  onClose() {
+    this.contentEl.empty();
+    try {
+      if (this.plugin && this.plugin.pagesInspector && this.plugin.pagesInspector.isOpen()) {
+        this.plugin.pagesInspector.renderBody();
+      }
+    } catch (e) { /* 무시 */ }
+  }
+}
+
+/** 대지 기호 선택 모달 (윈도우 ㅁ+한자 전체 특수기호 지원 및 비주얼 팔레트) */
+class SmmMarkModal extends Modal {
+  constructor(app, onPick) {
+    super(app);
+    this.onPick = onPick;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl('h3', { text: '대지 기호 선택' });
+
+    const desc = contentEl.createEl('p', {
+      text: '적용할 기호를 클릭하세요. (선택된 여러 줄 일괄 적용)',
+    });
+    desc.style.cssText = 'color: var(--text-muted); font-size: 13px; margin-bottom: 12px;';
+
+    const scrollBox = contentEl.createDiv();
+    scrollBox.style.cssText = 'max-height: 420px; overflow-y: auto; padding: 2px 4px 8px; margin-bottom: 16px;';
+
+    const makeMarkBtn = (container, mark) => {
+      const btn = container.createEl('button');
+      btn.textContent = mark;
+      btn.title = mark;
+      btn.style.cssText = 'padding: 0; height: 38px; border-radius: 6px; border: 1px solid var(--background-modifier-border); background: var(--background-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 19px; font-weight: 700; color: var(--smm-mark-strong-color, #BF4E14); transition: transform 0.08s, background 0.15s, border-color 0.15s;';
+      btn.onmouseenter = () => {
+        btn.style.background = 'var(--background-modifier-hover)';
+        btn.style.borderColor = 'var(--interactive-accent)';
+        btn.style.transform = 'scale(1.08)';
+      };
+      btn.onmouseleave = () => {
+        btn.style.background = 'var(--background-secondary)';
+        btn.style.borderColor = 'var(--background-modifier-border)';
+        btn.style.transform = 'scale(1)';
+      };
+      btn.onclick = () => {
+        this.onPick(mark);
+        this.close();
+      };
+      return btn;
+    };
+
+    // 1. 자주 쓰는 대표 대지 기호
+    const topLabel = scrollBox.createEl('div', { text: '자주 쓰는 대지 기호' });
+    topLabel.style.cssText = 'font-size: 12px; font-weight: 700; color: var(--text-normal); margin-bottom: 6px;';
+
+    const quickMarks = ['✓', '●', '■', '◆', '▶', '★', '※', '◎', '▲', '▼', '○', '□', '◇'];
+    const quickGrid = scrollBox.createDiv();
+    quickGrid.style.cssText = 'display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 6px; margin-bottom: 14px;';
+
+    for (const q of quickMarks) {
+      makeMarkBtn(quickGrid, q);
+    }
+
+    // 2. 윈도우 ㅁ+한자 전체 특수 기호
+    const hanjaLabel = scrollBox.createEl('div', { text: '특수 기호 (ㅁ + 한자 전체)' });
+    hanjaLabel.style.cssText = 'font-size: 12px; font-weight: 700; color: var(--text-normal); margin-bottom: 6px;';
+
+    const hanjaGrid = scrollBox.createDiv();
+    hanjaGrid.style.cssText = 'display: grid; grid-template-columns: repeat(10, 1fr); gap: 5px;';
+
+    for (const m of SMM_HANJA_M_MARKS) {
+      makeMarkBtn(hanjaGrid, m);
+    }
+
+    // 3. 하단 버튼 바 (기호 제거 / 취소)
+    const clearRow = contentEl.createDiv();
+    clearRow.style.cssText = 'display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--background-modifier-border); padding-top: 12px;';
+    const clearBtn = clearRow.createEl('button', { text: '기호 제거 (기본 가상기호로 복원)' });
+    clearBtn.onclick = () => {
+      this.onPick(null);
+      this.close();
+    };
+    const cancelBtn = clearRow.createEl('button', { text: '취소' });
+    cancelBtn.onclick = () => this.close();
+  }
+  onClose() {
+    this.contentEl.empty();
+    try {
+      if (this.plugin && this.plugin.pagesInspector && this.plugin.pagesInspector.isOpen()) {
+        this.plugin.pagesInspector.renderBody();
+      }
+    } catch (e) { /* 무시 */ }
+  }
+}
+
+/* =========================================================================================
+ * 편집 모드 오타 자동고침 (자동 대치) 엔진 및 관리 모달
+ * 스페이스바, 줄바꿈(Enter), 문장부호(.,?!;:)]) 입력 시 직전 단어를 검사하여
+ * 등록된 오타를 바른 글자로 자연스럽게 자동 대치합니다.
+ * - 조사/어미 결합 자동 인식 지원 (예: "하난미" → "하나님" 등록 시 "하난미께서" → "하나님께서")
+ * - 자동고침 직후 Ctrl+Z / Cmd+Z 를 누르면 방금 고쳐진 글자만 원래 입력한 오타로 즉시 복원됩니다.
+ * ========================================================================================= */
+
+const SMM_AUTOCORRECT_DELIM_RE = /^[ .,?!;:)\]]$/;
+const SMM_AUTOCORRECT_LEAD_RE = /^[("'“‘\[\{<*_~=]+/;
+const SMM_AUTOCORRECT_TRAIL_RE = /[)"'”’\]\}>*_~=]+$/;
+
+function smmMatchAutocorrectWord(rawToken, settings) {
+  if (!rawToken || !settings || settings.edAutocorrectEnabled === false) return null;
+  const rules = settings.edAutocorrectRules;
+  if (!rules || typeof rules !== 'object') return null;
+
+  const leadMatch = rawToken.match(SMM_AUTOCORRECT_LEAD_RE);
+  const trailMatch = rawToken.match(SMM_AUTOCORRECT_TRAIL_RE);
+  const leadLen = leadMatch ? leadMatch[0].length : 0;
+  const trailLen = trailMatch ? trailMatch[0].length : 0;
+  if (leadLen + trailLen >= rawToken.length) return null;
+
+  const coreWord = rawToken.slice(leadLen, rawToken.length - trailLen);
+  if (!coreWord) return null;
+
+  // 1) 완전 일치 우선
+  if (Object.prototype.hasOwnProperty.call(rules, coreWord)) {
+    const rep = String(rules[coreWord] || '');
+    if (rep && rep !== coreWord) {
+      return {
+        matchStartOffset: leadLen,
+        matchEndOffset: rawToken.length - trailLen,
+        original: coreWord,
+        replacement: rep,
+      };
+    }
+  }
+
+  // 2) 어절 앞부분 + 한글 조사/어미 결합 매칭 (글자 수 2자 이상인 규칙만, 긴 규칙 우선)
+  if (settings.edAutocorrectPrefixMatch !== false) {
+    const keys = Object.keys(rules)
+      .filter((k) => k && k.length >= 2)
+      .sort((a, b) => b.length - a.length);
+    for (const k of keys) {
+      if (coreWord.length > k.length && coreWord.startsWith(k)) {
+        const suffix = coreWord.slice(k.length);
+        if (/^[가-힣]+$/.test(suffix)) {
+          const rep = String(rules[k] || '');
+          if (rep && rep !== k) {
+            return {
+              matchStartOffset: leadLen,
+              matchEndOffset: leadLen + k.length,
+              original: k,
+              replacement: rep,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/** 스페이스바나 문장부호 입력 직후 커서 바로 앞 어절을 검사하여 자동고침 */
+function smmTryAutocorrectEditor(plugin, editor) {
+  try {
+    if (!plugin || !editor || !plugin.settings || plugin.settings.edAutocorrectEnabled === false) return false;
+    if (typeof editor.somethingSelected === 'function' && editor.somethingSelected()) return false;
+    const cur = editor.getCursor();
+    if (!cur || cur.ch < 2) return false;
+    const line = editor.getLine(cur.line);
+    if (!line) return false;
+
+    const delimIdx = cur.ch - 1;
+    const delimCh = line.charAt(delimIdx);
+    if (!SMM_AUTOCORRECT_DELIM_RE.test(delimCh)) return false;
+
+    let i = delimIdx - 1;
+    while (i >= 0 && !/[ \t]/.test(line.charAt(i))) i--;
+    const tokenStart = i + 1;
+    const tokenEnd = delimIdx;
+    if (tokenEnd <= tokenStart) return false;
+
+    const rawToken = line.slice(tokenStart, tokenEnd);
+    const hit = smmMatchAutocorrectWord(rawToken, plugin.settings);
+    if (!hit) return false;
+
+    const repFromCh = tokenStart + hit.matchStartOffset;
+    const repToCh = tokenStart + hit.matchEndOffset;
+
+    // 방금 사용자가 Ctrl+Z로 취소한 위치·단어라면 다시 고치지 않고 건너뜀
+    const sk = plugin._autocorrectSkip;
+    if (sk && sk.line === cur.line && sk.fromCh === repFromCh && sk.original === hit.original && (Date.now() - sk.ts < 6000)) {
+      return false;
+    }
+
+    editor.replaceRange(
+      hit.replacement,
+      { line: cur.line, ch: repFromCh },
+      { line: cur.line, ch: repToCh }
+    );
+
+    plugin._lastAutocorrect = {
+      editor,
+      line: cur.line,
+      fromCh: repFromCh,
+      toCh: repFromCh + hit.replacement.length,
+      original: hit.original,
+      replacement: hit.replacement,
+      ts: Date.now(),
+    };
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** 엔터(줄바꿈) 입력 직후 직전 줄의 마지막 어절을 검사하여 자동고침 */
+function smmTryAutocorrectLineEnd(plugin, editor, lineIdx) {
+  try {
+    if (!plugin || !editor || !plugin.settings || plugin.settings.edAutocorrectEnabled === false) return false;
+    if (typeof lineIdx !== 'number' || lineIdx < 0 || lineIdx >= editor.lineCount()) return false;
+    const rawLine = editor.getLine(lineIdx);
+    if (!rawLine) return false;
+
+    // 줄 끝에 붙은 %%shade:...%% 주석이나 공백은 건너뛰고 실제 마지막 어절 끝 위치 파악
+    const shadeMatch = rawLine.match(SMM_SHADE_RE);
+    let endLimit = shadeMatch ? (rawLine.length - shadeMatch[0].length) : rawLine.length;
+    while (endLimit > 0 && /[ \t.,?!;:)\]]/.test(rawLine.charAt(endLimit - 1))) {
+      endLimit--;
+    }
+    if (endLimit <= 0) return false;
+
+    let i = endLimit - 1;
+    while (i >= 0 && !/[ \t]/.test(rawLine.charAt(i))) i--;
+    const tokenStart = i + 1;
+    const tokenEnd = endLimit;
+    if (tokenEnd <= tokenStart) return false;
+
+    const rawToken = rawLine.slice(tokenStart, tokenEnd);
+    const hit = smmMatchAutocorrectWord(rawToken, plugin.settings);
+    if (!hit) return false;
+
+    const repFromCh = tokenStart + hit.matchStartOffset;
+    const repToCh = tokenStart + hit.matchEndOffset;
+
+    const sk = plugin._autocorrectSkip;
+    if (sk && sk.line === lineIdx && sk.fromCh === repFromCh && sk.original === hit.original && (Date.now() - sk.ts < 6000)) {
+      return false;
+    }
+
+    editor.replaceRange(
+      hit.replacement,
+      { line: lineIdx, ch: repFromCh },
+      { line: lineIdx, ch: repToCh }
+    );
+
+    plugin._lastAutocorrect = {
+      editor,
+      line: lineIdx,
+      fromCh: repFromCh,
+      toCh: repFromCh + hit.replacement.length,
+      original: hit.original,
+      replacement: hit.replacement,
+      ts: Date.now(),
+    };
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** 마인드맵 노드 입력칸(contenteditable)에서 스페이스/문장부호 입력 시 오타 자동고침 */
+function smmTryAutocorrectContentEditable(plugin, inp) {
+  try {
+    if (!plugin || !inp || !plugin.settings || plugin.settings.edAutocorrectEnabled === false) return false;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !sel.isCollapsed) return false;
+    const r = sel.getRangeAt(0);
+    if (!inp.contains(r.startContainer) || r.startContainer.nodeType !== 3) return false;
+
+    const textNode = r.startContainer;
+    const curOff = r.startOffset;
+    if (curOff < 2) return false;
+
+    const text = textNode.data || '';
+    const delimIdx = curOff - 1;
+    const delimCh = text.charAt(delimIdx);
+    if (!/^[\s\u00A0.,?!;:)\]]$/.test(delimCh)) return false;
+
+    let i = delimIdx - 1;
+    while (i >= 0 && !/[\s\u00A0]/.test(text.charAt(i))) i--;
+    const tokenStart = i + 1;
+    const tokenEnd = delimIdx;
+    if (tokenEnd <= tokenStart) return false;
+
+    const rawToken = text.slice(tokenStart, tokenEnd);
+    const hit = smmMatchAutocorrectWord(rawToken, plugin.settings);
+    if (!hit) return false;
+
+    const repFromOff = tokenStart + hit.matchStartOffset;
+    const repLen = hit.matchEndOffset - hit.matchStartOffset;
+    textNode.replaceData(repFromOff, repLen, hit.replacement);
+
+    const newCaretOff = curOff + (hit.replacement.length - repLen);
+    const r2 = document.createRange();
+    r2.setStart(textNode, Math.min(newCaretOff, textNode.data.length));
+    r2.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r2);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** 오타 자동고침(자동 대치) 단어장 등록 · 관리 모달 */
+class SmmAutocorrectModal extends Modal {
+  constructor(app, plugin, initialTypo, onReplaceNow) {
+    super(app);
+    this.plugin = plugin;
+    this.initialTypo = String(initialTypo || '').trim();
+    this.onReplaceNow = onReplaceNow || null;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('smm-autocorrect-modal');
+
+    if (!this.plugin.settings.edAutocorrectRules || typeof this.plugin.settings.edAutocorrectRules !== 'object') {
+      this.plugin.settings.edAutocorrectRules = Object.assign({}, DEFAULT_SETTINGS.edAutocorrectRules);
+    }
+    const s = this.plugin.settings;
+
+    contentEl.createEl('h3', { text: '✨ 오타 자동고침 (자동 대치) 단어장' });
+    const desc = contentEl.createEl('p', {
+      text: '편집 화면에서 글을 쓰다가 스페이스바(공백), 엔터, 문장부호(.,?!)를 누르면 등록된 오타가 바른 글자로 자연스럽게 고쳐집니다. (고쳐진 직후 Ctrl+Z를 누르면 원래 글자로 즉시 되돌아갑니다)',
+    });
+    desc.style.cssText = 'color: var(--text-muted); font-size: 12.5px; line-height: 1.5; margin-bottom: 12px;';
+
+    // 1. 상단 스위치 영역
+    const toggleBox = contentEl.createDiv({ cls: 'smm-ac-toggle-box' });
+
+    const rowEn = toggleBox.createDiv({ cls: 'smm-ac-toggle-row' });
+    const lblEn = rowEn.createEl('label', { cls: 'smm-ac-toggle-label' });
+    const chkEn = lblEn.createEl('input', { type: 'checkbox' });
+    chkEn.checked = s.edAutocorrectEnabled !== false;
+    lblEn.createSpan({ text: '오타 자동고침 켜기' });
+    chkEn.onchange = async () => {
+      s.edAutocorrectEnabled = chkEn.checked;
+      await this.plugin.saveData(s);
+    };
+
+    const rowPre = toggleBox.createDiv({ cls: 'smm-ac-toggle-row' });
+    const lblPre = rowPre.createEl('label', { cls: 'smm-ac-toggle-label' });
+    const chkPre = lblPre.createEl('input', { type: 'checkbox' });
+    chkPre.checked = s.edAutocorrectPrefixMatch !== false;
+    lblPre.createSpan({ text: '뒤에 한글 조사·어미가 붙어도 자동 인식 (예: "하난미께서" → "하나님께서")' });
+    chkPre.onchange = async () => {
+      s.edAutocorrectPrefixMatch = chkPre.checked;
+      await this.plugin.saveData(s);
+    };
+
+    // 2. 새 규칙 추가 입력 행
+    const addBox = contentEl.createDiv({ cls: 'smm-ac-add-box' });
+    const inTypo = addBox.createEl('input', {
+      cls: 'smm-ac-input',
+      type: 'text',
+      placeholder: '자주 틀리는 오타 (예: 하난미)',
+    });
+    if (this.initialTypo) inTypo.value = this.initialTypo;
+
+    addBox.createSpan({ cls: 'smm-ac-arrow', text: '→' });
+
+    const inRight = addBox.createEl('input', {
+      cls: 'smm-ac-input',
+      type: 'text',
+      placeholder: '바른 글자 (예: 하나님)',
+    });
+    if (this.initialTypo && s.edAutocorrectRules[this.initialTypo]) {
+      inRight.value = s.edAutocorrectRules[this.initialTypo];
+    }
+
+    const addBtn = addBox.createEl('button', { cls: 'mod-cta smm-ac-add-btn', text: '추가 / 저장' });
+
+    // 3. 등록된 목록 영역
+    const listHeader = contentEl.createDiv({ cls: 'smm-ac-list-header' });
+    const countSpan = listHeader.createSpan({ cls: 'smm-ac-count' });
+    const searchIn = listHeader.createEl('input', {
+      cls: 'smm-ac-search',
+      type: 'search',
+      placeholder: '등록된 단어 검색...',
+    });
+
+    const listWrap = contentEl.createDiv({ cls: 'smm-ac-list' });
+
+    const renderList = () => {
+      listWrap.empty();
+      const rules = s.edAutocorrectRules || {};
+      const keys = Object.keys(rules).sort((a, b) => a.localeCompare(b, 'ko'));
+      countSpan.setText(`등록된 자동고침 (${keys.length}개)`);
+
+      const q = String(searchIn.value || '').trim().toLowerCase();
+      const filtered = q
+        ? keys.filter((k) => k.toLowerCase().includes(q) || String(rules[k] || '').toLowerCase().includes(q))
+        : keys;
+
+      if (!filtered.length) {
+        const emptyEl = listWrap.createDiv({
+          cls: 'smm-ac-empty',
+          text: q ? '검색 결과가 없습니다.' : '등록된 오타 자동고침 항목이 없습니다. 위 입력칸에서 추가해 보세요.',
+        });
+        return;
+      }
+
+      for (const k of filtered) {
+        const item = listWrap.createDiv({ cls: 'smm-ac-item' });
+        const pair = item.createDiv({ cls: 'smm-ac-pair' });
+        pair.createSpan({ cls: 'smm-ac-typo', text: k });
+        pair.createSpan({ cls: 'smm-ac-item-arrow', text: '→' });
+        pair.createSpan({ cls: 'smm-ac-correct', text: rules[k] });
+        pair.title = '클릭하여 수정';
+        pair.onclick = () => {
+          inTypo.value = k;
+          inRight.value = rules[k];
+          inRight.focus();
+          inRight.select();
+        };
+
+        const delBtn = item.createEl('button', { cls: 'smm-ac-del-btn', text: '삭제' });
+        delBtn.onclick = async () => {
+          delete s.edAutocorrectRules[k];
+          await this.plugin.saveData(s);
+          renderList();
+        };
+      }
+    };
+
+    const doAdd = async () => {
+      const t = String(inTypo.value || '').trim();
+      const r = String(inRight.value || '').trim();
+      if (!t || !r) {
+        new Notice('오타와 바른 글자를 모두 입력해 주세요.');
+        return;
+      }
+      if (t === r) {
+        new Notice('오타와 바른 글자가 서로 같습니다.');
+        return;
+      }
+      s.edAutocorrectRules[t] = r;
+      await this.plugin.saveData(s);
+      if (this.onReplaceNow && this.initialTypo && t === this.initialTypo) {
+        try { this.onReplaceNow(r); } catch (e) { /* 무시 */ }
+        this.onReplaceNow = null;
+      }
+      inTypo.value = '';
+      inRight.value = '';
+      renderList();
+      inTypo.focus();
+      new Notice(`자동고침 등록됨: "${t}" → "${r}"`);
+    };
+
+    addBtn.onclick = doAdd;
+    inTypo.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.isComposing) {
+        e.preventDefault();
+        inRight.focus();
+      }
+    });
+    inRight.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.isComposing) {
+        e.preventDefault();
+        doAdd();
+      }
+    });
+    searchIn.oninput = () => renderList();
+
+    renderList();
+
+    // 4. 하단 닫기 및 기본값 복원 바
+    const foot = contentEl.createDiv({ cls: 'smm-ac-foot' });
+    const resetDefBtn = foot.createEl('button', { text: '기본 예시 단어 추가' });
+    resetDefBtn.onclick = async () => {
+      Object.assign(s.edAutocorrectRules, DEFAULT_SETTINGS.edAutocorrectRules);
+      await this.plugin.saveData(s);
+      renderList();
+      new Notice('기본 오타 예시 단어들을 단어장에 추가했습니다.');
+    };
+    const closeBtn = foot.createEl('button', { text: '닫기' });
+    closeBtn.onclick = () => this.close();
+
+    setTimeout(() => {
+      if (this.initialTypo) inRight.focus();
+      else inTypo.focus();
+    }, 30);
+  }
+
+  onClose() {
+    this.contentEl.empty();
+    try {
+      if (this.plugin && this.plugin.pagesInspector && this.plugin.pagesInspector.isOpen()) {
+        this.plugin.pagesInspector.renderBody();
+      }
+    } catch (e) { /* 무시 */ }
+  }
+}
+
+
+/**
+ * 현재 줄의 문단 유형을 변환 (본문 / H1~H6 / > 인용)
+ * 줄 끝에 붙은 %%shade:...%% 태그는 보존한다.
+ */
+function smmSetLineParagraphType(line, type) {
+  let raw = String(line == null ? '' : line);
+  let shadeSuffix = '';
+  const sm = raw.match(SMM_SHADE_RE);
+  if (sm) {
+    shadeSuffix = ' ' + sm[0].trim();
+    raw = raw.replace(SMM_SHADE_RE, '');
+  }
+  const indentMatch = raw.match(/^([ \t]*)/);
+  const indent = indentMatch ? indentMatch[1] : '';
+  let rest = raw.slice(indent.length);
+
+  if (type === 'body') {
+    rest = rest.replace(/^#{1,6}[ \t]+/, '').replace(/^>[ \t]?/, '');
+    return indent + rest + shadeSuffix;
+  }
+  if (type === 'quote') {
+    if (!rest.trim() && !shadeSuffix) return line;
+    if (/^>[ \t]?/.test(rest)) {
+      rest = rest.replace(/^>[ \t]?/, '');
+      return indent + rest + shadeSuffix;
+    }
+    rest = rest.replace(/^#{1,6}[ \t]+/, '');
+    return indent + '> ' + rest + shadeSuffix;
+  }
+  const hm = /^h([1-6])$/i.exec(type);
+  if (hm) {
+    if (!rest.trim() && !shadeSuffix) return line;
+    const lv = parseInt(hm[1], 10);
+    const hashes = '#'.repeat(lv);
+    const curHm = rest.match(/^(#{1,6})[ \t]+(.*)$/);
+    if (curHm && curHm[1].length === lv) {
+      return indent + curHm[2] + shadeSuffix;
+    }
+    rest = rest.replace(/^#{1,6}[ \t]+/, '').replace(/^>[ \t]?/, '');
+    const em = smmParseExplicitMarkLine(rest);
+    if (em) rest = em.explicitNum ? `${em.mark} ${em.body}` : em.body;
+    return hashes + ' ' + rest + shadeSuffix;
+  }
+  return line;
+}
+
+/**
+ * macOS Apple Pages 스타일 플로팅 포맷·스타일 인스펙터
+ * 편집 화면 우측 상단에 떠서 글을 가리지 않고 실시간으로 줄 서식과 설교문 전체 스타일을 조작한다.
+ */
+class SmmPagesInspector {
+  constructor(plugin) {
+    this.plugin = plugin;
+    this.app = plugin.app;
+    this.el = null;
+    this.bodyEl = null;
+    this.activeTab = 'node'; // 'node' | 'text' | 'mark'
+    this.pinned = true;      // 기본 고정: 에디터 다른 줄을 클릭해도 창이 닫히지 않고 계속 편집 가능
+    this.hanjaExpanded = false;
+    this.pos = null;         // 드래그로 이동한 위치 { left, top }
+    this.lastEditor = null;
+    this.colorMode = (typeof document !== 'undefined' && document.body && document.body.classList.contains('theme-dark')) ? 'dark' : 'light';
+
+    this._onKeyDown = (e) => {
+      if (!this.el) return;
+      if (e.key === 'Escape') {
+        const active = document.activeElement;
+        if (active && this.el.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'SELECT')) {
+          active.blur();
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        this.close();
+      }
+    };
+    this._onOutsideDown = (e) => {
+      if (!this.el || this.pinned) return;
+      if (this.el.contains(e.target)) return;
+      // 모달 창(글꼴 검색 등) 클릭 시에는 닫지 않음
+      if (e.target && e.target.closest && e.target.closest('.modal-container, .suggestion-container, .menu')) return;
+      this.close();
+    };
+  }
+
+  isOpen() {
+    return !!(this.el && document.body.contains(this.el));
+  }
+
+  toggle(editor) {
+    if (editor) this.lastEditor = editor;
+    if (this.isOpen()) {
+      this.close();
+    } else {
+      this.open(editor);
+    }
+  }
+
+  getTargetEditor() {
+    try {
+      const ae = this.app.workspace.activeEditor;
+      if (ae && ae.editor) {
+        this.lastEditor = ae.editor;
+        return ae.editor;
+      }
+    } catch (e) { /* 무시 */ }
+    try {
+      const mv = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+      if (mv && mv.editor) {
+        this.lastEditor = mv.editor;
+        return mv.editor;
+      }
+    } catch (e) { /* 무시 */ }
+    if (this.lastEditor) return this.lastEditor;
+    try {
+      const leaves = this.app.workspace.getLeavesOfType('markdown');
+      for (const leaf of leaves) {
+        if (leaf.view && leaf.view.editor) {
+          this.lastEditor = leaf.view.editor;
+          return leaf.view.editor;
+        }
+      }
+    } catch (e) { /* 무시 */ }
+    return null;
+  }
+
+  getTargetMindmapView() {
+    try {
+      const mmv = this.app.workspace.getActiveViewOfType(SermonMindmapView);
+      if (mmv) return mmv;
+    } catch (e) { /* 무시 */ }
+    try {
+      const leaf = this.app.workspace.getMostRecentLeaf();
+      if (leaf && leaf.view && leaf.view.getViewType && leaf.view.getViewType() === VIEW_TYPE) {
+        return leaf.view;
+      }
+    } catch (e) { /* 무시 */ }
+    return null;
+  }
+
+  runOnEditorLines(transformFn) {
+    const mmv = this.getTargetMindmapView();
+    if (mmv && mmv.doc && Array.isArray(mmv.doc.lines)) {
+      const selNode = typeof mmv.selectedNode === 'function' ? mmv.selectedNode() : null;
+      if (selNode && selNode.kind !== 'root' && typeof selNode.line === 'number') {
+        const lines = mmv.doc.lines.slice();
+        const startLine = selNode.line;
+        const endLine = (selNode.kind === 'body' && typeof selNode.endLine === 'number') ? selNode.endLine : startLine;
+        for (let i = startLine; i <= endLine && i < lines.length; i++) {
+          lines[i] = transformFn(lines[i]);
+        }
+        mmv.applyLines(lines, { selectLine: startLine });
+        return;
+      }
+    }
+    const ed = this.getTargetEditor();
+    if (!ed) {
+      new Notice('편집 중인 설교문(마크다운) 화면이나 마인드맵 노드를 먼저 클릭해 주세요.');
+      return;
+    }
+    smmTransformSelectedLines(ed, transformFn);
+  }
+
+  runOutlineOnEditorLines(styleId) {
+    const mmv = this.getTargetMindmapView();
+    if (mmv && mmv.doc && Array.isArray(mmv.doc.lines)) {
+      const selNode = typeof mmv.selectedNode === 'function' ? mmv.selectedNode() : null;
+      if (selNode && selNode.kind !== 'root' && typeof selNode.line === 'number') {
+        const endLine = (selNode.kind === 'body' && typeof selNode.endLine === 'number') ? selNode.endLine : selNode.line;
+        const lines = smmApplyOutlineMarksToLines(mmv.doc.lines, selNode.line, endLine, styleId);
+        mmv.applyLines(lines, { selectLine: selNode.line });
+        return;
+      }
+    }
+    const ed = this.getTargetEditor();
+    if (!ed) {
+      new Notice('편집 중인 설교문(마크다운) 화면이나 마인드맵 노드를 먼저 클릭해 주세요.');
+      return;
+    }
+    const sel = ed.listSelections ? ed.listSelections() : null;
+    let startLine, endLine;
+    if (sel && sel.length > 0 && ed.somethingSelected && ed.somethingSelected()) {
+      const s = sel[0];
+      const a = Math.min(s.anchor.line, s.head.line);
+      let b = Math.max(s.anchor.line, s.head.line);
+      const endAnchor = s.anchor.line >= s.head.line ? s.anchor : s.head;
+      if (endAnchor.ch === 0 && b > a) b--;
+      startLine = a;
+      endLine = b;
+    } else {
+      const cur = ed.getCursor();
+      startLine = cur.line;
+      endLine = cur.line;
+    }
+    const total = ed.lineCount();
+    const docLines = [];
+    for (let i = 0; i < total; i++) docLines.push(ed.getLine(i));
+    const updated = smmApplyOutlineMarksToLines(docLines, startLine, endLine, styleId);
+    const oldSlice = docLines.slice(startLine, endLine + 1);
+    const newSlice = updated.slice(startLine, endLine + 1);
+    if (oldSlice.join('\n') !== newSlice.join('\n')) {
+      ed.replaceRange(
+        newSlice.join('\n'),
+        { line: startLine, ch: 0 },
+        { line: endLine, ch: docLines[endLine].length }
+      );
+    }
+  }
+
+  runHighlightColor(colorKey) {
+    const mmv = this.getTargetMindmapView();
+    if (mmv && mmv.doc && Array.isArray(mmv.doc.lines)) {
+      // 마인드맵 노드 입력 중(contenteditable)인 경우 선택 영역에 적용
+      if (mmv.editing && mmv._editEl) {
+        const inp = mmv._editEl;
+        const selObj = window.getSelection();
+        if (selObj && selObj.rangeCount && inp.contains(selObj.getRangeAt(0).commonAncestorContainer)) {
+          const r = selObj.getRangeAt(0);
+          const selectedText = r.toString();
+          if (selectedText) {
+            const rep = smmTransformHighlightText(selectedText, colorKey);
+            r.deleteContents();
+            const tn = document.createTextNode(rep);
+            r.insertNode(tn);
+            const r2 = document.createRange();
+            r2.selectNodeContents(tn);
+            selObj.removeAllRanges();
+            selObj.addRange(r2);
+            return;
+          }
+        }
+      }
+      // 마인드맵 노드가 선택된 상태인 경우 노드 텍스트에 형광펜 색상 적용/변경/해제
+      const selNode = typeof mmv.selectedNode === 'function' ? mmv.selectedNode() : null;
+      if (selNode && selNode.kind !== 'root' && typeof selNode.line === 'number') {
+        const lines = mmv.doc.lines.slice();
+        const shadeSuffix = (selNode.shade && selNode.shade.token) ? (' ' + selNode.shade.token) : '';
+        const applyToText = (t) => {
+          const trimmed = String(t || '').trim();
+          if (!trimmed) return t;
+          if (colorKey === 'clear') {
+            return String(t).replace(/==(?:\s*(?:🔴|🟠|🟡|🟢|🔵|🟣)\uFE0F?\s*)?((?:(?!==)[^\n])+?)==/gu, '$1');
+          }
+          // 이미 전체가 ==...== 감싸져 있지 않고 일부에 ==...==가 있는 경우 그 색상을 교체
+          const info = smmAnalyzeHighlightText(trimmed);
+          if (!info.isHl && /==[^=\n]+==/.test(trimmed)) {
+            return String(t).replace(/==[^=\n]+==/g, (m) => smmTransformHighlightText(m, colorKey));
+          }
+          const lead = (String(t).match(/^[ \t]*/) || [''])[0];
+          const trail = (String(t).match(/[ \t]*$/) || [''])[0];
+          const core = String(t).slice(lead.length, String(t).length - trail.length);
+          return lead + smmTransformHighlightText(core, colorKey) + trail;
+        };
+        if (selNode.kind === 'body') {
+          const ind = selNode.bodyIndent || '';
+          const cnt = selNode.endLine - selNode.line + 1;
+          const splitted = selNode.text.split('\n').map((l) => (l.trim() === '' ? '' : ind + applyToText(l)));
+          if (shadeSuffix && splitted.length > 0) splitted[splitted.length - 1] += shadeSuffix;
+          lines.splice(selNode.line, cnt, ...splitted);
+        } else {
+          lines[selNode.line] = linePrefix(selNode) + applyToText(selNode.text) + shadeSuffix;
+        }
+        mmv.applyLines(lines, { selectLine: selNode.line });
+        return;
+      }
+    }
+    const ed = this.getTargetEditor();
+    if (!ed) {
+      new Notice('편집 중인 설교문(마크다운) 화면이나 마인드맵 노드를 먼저 클릭해 주세요.');
+      return;
+    }
+    if (colorKey === 'clear' && !ed.somethingSelected()) {
+      const cur = ed.getCursor();
+      const line = ed.getLine(cur.line);
+      // 커서가 ==...== 안에 있지 않다면 현재 줄의 모든 ==...== 강조를 해제
+      let inside = false;
+      const hlRe = /==[^=\n]+==/g;
+      let m;
+      while ((m = hlRe.exec(line)) !== null) {
+        if (cur.ch >= m.index && cur.ch <= m.index + m[0].length) {
+          inside = true;
+          break;
+        }
+      }
+      if (!inside && /==[^=\n]+==/.test(line)) {
+        const cleaned = line.replace(/==(?:\s*(?:🔴|🟠|🟡|🟢|🔵|🟣)\uFE0F?\s*)?((?:(?!==)[^\n])+?)==/gu, '$1');
+        ed.replaceRange(cleaned, { line: cur.line, ch: 0 }, { line: cur.line, ch: line.length });
+        return;
+      }
+    }
+    smmToggleHighlight(ed, colorKey);
+  }
+
+  open(editor) {
+    if (editor) this.lastEditor = editor;
+    else this.getTargetEditor();
+
+    this.colorMode = (typeof document !== 'undefined' && document.body && document.body.classList.contains('theme-dark')) ? 'dark' : 'light';
+
+    if (this.el) {
+      this.el.remove();
+      this.el = null;
+    }
+
+    const el = document.createElement('div');
+    el.className = 'smm-pages-inspector';
+    el.addEventListener('mousedown', (e) => {
+      const t = e.target;
+      if (t && t.closest && t.closest('input, select, textarea, option')) return;
+      e.preventDefault();
+    });
+    if (this.pos && typeof this.pos.left === 'number' && typeof this.pos.top === 'number') {
+      const maxLeft = Math.max(10, window.innerWidth - 330);
+      const maxTop = Math.max(10, window.innerHeight - 120);
+      el.style.left = Math.min(Math.max(8, this.pos.left), maxLeft) + 'px';
+      el.style.top = Math.min(Math.max(8, this.pos.top), maxTop) + 'px';
+      el.style.right = 'auto';
+    }
+    this.el = el;
+
+    this.renderHeader();
+    this.renderTabs();
+    this.bodyEl = el.createDiv({ cls: 'smm-pi-body' });
+    this.renderBody();
+
+    document.body.appendChild(el);
+    window.addEventListener('keydown', this._onKeyDown, true);
+    window.addEventListener('pointerdown', this._onOutsideDown, true);
+  }
+
+  close() {
+    window.removeEventListener('keydown', this._onKeyDown, true);
+    window.removeEventListener('pointerdown', this._onOutsideDown, true);
+    if (this.el) {
+      this.el.remove();
+      this.el = null;
+      this.bodyEl = null;
+    }
+  }
+
+  setThemeMode(mode) {
+    const wantDark = mode === 'dark';
+    this.colorMode = wantDark ? 'dark' : 'light';
+    try {
+      const scheme = wantDark ? 'obsidian' : 'moonstone';
+      if (typeof this.app.changeTheme === 'function') {
+        this.app.changeTheme(scheme);
+      } else if (typeof this.app.setTheme === 'function') {
+        this.app.setTheme(scheme);
+      }
+      if (this.app.vault && typeof this.app.vault.setConfig === 'function') {
+        this.app.vault.setConfig('theme', scheme);
+      }
+      document.body.classList.toggle('theme-dark', wantDark);
+      document.body.classList.toggle('theme-light', !wantDark);
+      this.app.workspace.trigger('css-change');
+    } catch (e) { /* 무시 */ }
+    smmClearHeaderFontCache();
+    this.plugin.updateMmStyleVars();
+    try { this.plugin.refreshReaders(); } catch (e) { /* 무시 */ }
+    if (this.el) {
+      const lightBtn = this.el.querySelector('[data-theme-mode="light"]');
+      const darkBtn = this.el.querySelector('[data-theme-mode="dark"]');
+      if (lightBtn) lightBtn.classList.toggle('is-active', !wantDark);
+      if (darkBtn) darkBtn.classList.toggle('is-active', wantDark);
+    }
+    this.renderBody();
+  }
+
+  renderHeader() {
+    const header = this.el.createDiv({ cls: 'smm-pi-header' });
+    const title = header.createDiv({ cls: 'smm-pi-title' });
+    title.textContent = '포맷 · 스타일';
+
+    const actions = header.createDiv({ cls: 'smm-pi-header-actions' });
+
+    // 라이트 / 다크 모드 실시간 전환 스위치
+    const themeWrap = actions.createDiv({ cls: 'smm-pi-theme-switch' });
+    const btnLight = themeWrap.createEl('button', { cls: 'smm-pi-theme-btn' + (this.colorMode === 'light' ? ' is-active' : ''), text: '☀️ 라이트' });
+    btnLight.dataset.themeMode = 'light';
+    btnLight.title = '라이트 모드로 전환 및 밝은 테마 색상 편집';
+    btnLight.onclick = (e) => { e.stopPropagation(); this.setThemeMode('light'); };
+
+    const btnDark = themeWrap.createEl('button', { cls: 'smm-pi-theme-btn' + (this.colorMode === 'dark' ? ' is-active' : ''), text: '🌙 다크' });
+    btnDark.dataset.themeMode = 'dark';
+    btnDark.title = '다크 모드로 전환 및 어두운 테마 색상 편집';
+    btnDark.onclick = (e) => { e.stopPropagation(); this.setThemeMode('dark'); };
+
+    // 고정(Pin) 버튼
+    const pinBtn = actions.createEl('button', {
+      cls: 'smm-pi-icon-btn' + (this.pinned ? ' is-pinned' : ''),
+      text: '📌',
+    });
+    pinBtn.title = this.pinned ? '창 고정됨 (클릭하면 바깥 클릭 시 자동 닫힘)' : '창 고정 해제됨 (클릭하면 화면에 고정)';
+    pinBtn.onclick = (e) => {
+      e.stopPropagation();
+      this.pinned = !this.pinned;
+      pinBtn.classList.toggle('is-pinned', this.pinned);
+      pinBtn.title = this.pinned ? '창 고정됨 (클릭하면 바깥 클릭 시 자동 닫힘)' : '창 고정 해제됨 (클릭하면 화면에 고정)';
+    };
+
+    // 닫기 버튼
+    const closeBtn = actions.createEl('button', { cls: 'smm-pi-icon-btn', text: '✕' });
+    closeBtn.title = '닫기 (Esc)';
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      this.close();
+    };
+
+    // 헤더 드래그 이동 (마우스 & 아이패드 터치 지원)
+    header.addEventListener('pointerdown', (e) => {
+      if (e.target && e.target.closest && e.target.closest('button')) return;
+      e.preventDefault();
+      const rect = this.el.getBoundingClientRect();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const origLeft = rect.left;
+      const origTop = rect.top;
+
+      const onMove = (ev) => {
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        const nextLeft = Math.min(Math.max(6, origLeft + dx), Math.max(6, window.innerWidth - rect.width - 6));
+        const nextTop = Math.min(Math.max(6, origTop + dy), Math.max(6, window.innerHeight - 60));
+        this.el.style.left = nextLeft + 'px';
+        this.el.style.top = nextTop + 'px';
+        this.el.style.right = 'auto';
+        this.pos = { left: nextLeft, top: nextTop };
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove, true);
+        window.removeEventListener('pointerup', onUp, true);
+      };
+      window.addEventListener('pointermove', onMove, true);
+      window.addEventListener('pointerup', onUp, true);
+    });
+  }
+
+  renderTabs() {
+    const tabsEl = this.el.createDiv({ cls: 'smm-pi-tabs' });
+    const tabs = [
+      { id: 'node', label: '🎨 노드·줄' },
+      { id: 'text', label: '🔤 글자·제목' },
+      { id: 'mark', label: '⚙️ 기호·연동' },
+    ];
+    for (const t of tabs) {
+      const b = tabsEl.createEl('button', {
+        cls: 'smm-pi-tab' + (this.activeTab === t.id ? ' is-active' : ''),
+        text: t.label,
+      });
+      b.onclick = () => {
+        this.activeTab = t.id;
+        tabsEl.querySelectorAll('.smm-pi-tab').forEach((el) => el.classList.remove('is-active'));
+        b.classList.add('is-active');
+        this.renderBody();
+      };
+    }
+  }
+
+  async saveAndRefresh(needsMarkRefresh = false) {
+    await this.plugin.saveSettings();
+    if (needsMarkRefresh) {
+      this.plugin.refreshAllMarkViews();
+    } else {
+      this.plugin.updateMmStyleVars();
+      try { this.plugin.refreshReaders(); } catch (e) { /* 무시 */ }
+      try { this.app.workspace.updateOptions(); } catch (e) { /* 무시 */ }
+    }
+  }
+
+  /** 옵시디언 기본 본문 글자 크기(px) 조회 */
+  getDefaultBodySizePx() {
+    try {
+      if (this.app && this.app.vault && typeof this.app.vault.getConfig === 'function') {
+        const bfs = parseFloat(this.app.vault.getConfig('baseFontSize'));
+        if (Number.isFinite(bfs) && bfs >= 10 && bfs <= 48) return Math.round(bfs);
+      }
+    } catch (e) { /* 무시 */ }
+    try {
+      if (typeof document !== 'undefined' && document.body) {
+        const v = parseFloat(getComputedStyle(document.body).getPropertyValue('--font-text-size'));
+        if (Number.isFinite(v) && v >= 10 && v <= 48) return Math.round(v);
+      }
+    } catch (e) { /* 무시 */ }
+    return 16;
+  }
+
+  /** 현재 적용 중인 본문 글자 크기(px) (edSizeBody 설정값 우선, 없으면 옵시디언 기본값) */
+  getEffectiveBodySizePx() {
+    const s = this.plugin.settings || {};
+    const custom = smmNumOr(s.edSizeBody, 0);
+    return custom > 0 ? Math.round(custom) : this.getDefaultBodySizePx();
+  }
+
+  /** 제목 H1~H6 각 단계의 테마 기본 크기(px) 계산 */
+  getDefaultHeadingSizePx(lv) {
+    const ratios = [1, 1.6, 1.35, 1.2, 1.1, 1.03, 0.97];
+    const effBody = this.getEffectiveBodySizePx();
+    try {
+      const hm = smmProbeThemeHeaderMetrics();
+      const m = hm && hm[lv];
+      if (m && m.size) {
+        const parsed = parseFloat(m.size);
+        if (Number.isFinite(parsed) && parsed > 6) {
+          const defBody = this.getDefaultBodySizePx();
+          if (defBody > 0 && effBody !== defBody) {
+            return Math.round((parsed / defBody) * effBody);
+          }
+          return Math.round(parsed);
+        }
+      }
+    } catch (e) { /* 무시 */ }
+    return Math.round(effBody * (ratios[lv] || 1));
+  }
+
+  /** 테마 기본 일반 글자색(#RRGGBB) 조회 */
+  getDefaultNormalHex() {
+    const isDark = this.colorMode === 'dark';
+    const fallback = isDark ? 'DADADA' : '222222';
+    try {
+      if (typeof document !== 'undefined' && document.body) {
+        const raw = String(getComputedStyle(document.body).getPropertyValue('--text-normal') || '').trim();
+        const hexClean = smmHexOr(raw, '');
+        if (hexClean) return hexClean;
+        const m = raw.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+        if (m) {
+          const toHex = (n) => Math.max(0, Math.min(255, parseInt(n, 10) || 0)).toString(16).padStart(2, '0').toUpperCase();
+          return toHex(m[1]) + toHex(m[2]) + toHex(m[3]);
+        }
+      }
+    } catch (e) { /* 무시 */ }
+    return fallback;
+  }
+
+  /** 스테퍼([−] [입력] [+]) 생성 헬퍼 */
+  createStepper(parent, { value, placeholder, step = 1, min = 0, max = 200, isFloat = false, onChange }) {
+    const wrap = parent.createDiv({ cls: 'smm-pi-stepper' });
+    const minus = wrap.createEl('button', { cls: 'smm-pi-step-btn', text: '−' });
+    const inp = wrap.createEl('input', { cls: 'smm-pi-step-input', type: 'text' });
+    inp.placeholder = placeholder || '기본';
+    inp.value = value === '' || value == null ? '' : String(value);
+    const plus = wrap.createEl('button', { cls: 'smm-pi-step-btn', text: '+' });
+
+    const parsePlaceholderNum = () => {
+      const m = String(inp.placeholder || placeholder || '').match(/(\d+(?:\.\d+)?)/);
+      if (m) {
+        const v = parseFloat(m[1]);
+        if (Number.isFinite(v)) return v;
+      }
+      return isFloat ? 1.75 : 16;
+    };
+
+    const commit = async (rawVal) => {
+      const trimmed = String(rawVal == null ? '' : rawVal).trim();
+      if (!trimmed) {
+        inp.value = '';
+        await onChange('');
+        return;
+      }
+      const n = isFloat ? parseFloat(trimmed) : parseInt(trimmed, 10);
+      if (!Number.isFinite(n)) {
+        inp.value = '';
+        await onChange('');
+        return;
+      }
+      const clamped = Math.min(max, Math.max(min, isFloat ? Math.round(n * 100) / 100 : n));
+      inp.value = String(clamped);
+      await onChange(clamped);
+    };
+
+    minus.onclick = () => {
+      const cur = parseFloat(inp.value);
+      const base = Number.isFinite(cur) ? cur : parsePlaceholderNum();
+      commit(base - step);
+    };
+    plus.onclick = () => {
+      const cur = parseFloat(inp.value);
+      const base = Number.isFinite(cur) ? cur : parsePlaceholderNum();
+      commit(base + step);
+    };
+    inp.onchange = () => commit(inp.value);
+    inp.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commit(inp.value);
+        inp.blur();
+      }
+    };
+    return {
+      wrap,
+      inp,
+      setValue: (v) => { inp.value = v === '' || v == null ? '' : String(v); },
+      setPlaceholder: (p) => { inp.placeholder = p || '기본'; },
+    };
+  }
+
+  /** 번들 글꼴 드롭다운 + 검색 버튼 생성 헬퍼 */
+  createFontSelect(parent, settingKey, emptyLabel = '기본 글꼴 (테마 따름)') {
+    const s = this.plugin.settings;
+    const cur = String(s[settingKey] || '').trim();
+    const fonts = smmListPickableFonts();
+    if (cur && !fonts.includes(cur)) fonts.unshift(cur);
+
+    const sel = parent.createEl('select', { cls: 'smm-pi-select' });
+    const optEmpty = sel.createEl('option', { value: '', text: emptyLabel });
+    if (!cur) optEmpty.selected = true;
+    for (const f of fonts) {
+      const o = sel.createEl('option', { value: f, text: f });
+      if (f === cur) o.selected = true;
+    }
+    sel.onchange = async () => {
+      s[settingKey] = sel.value;
+      smmClearHeaderFontCache();
+      await this.saveAndRefresh(false);
+    };
+    return sel;
+  }
+
+  /** 컬러 피커 + 초기화 버튼 생성 헬퍼 */
+  createColorControl(parent, settingKey, defaultHex, fallbackDisplayHex = '888888') {
+    const s = this.plugin.settings;
+    const defClean = String(defaultHex || '').replace(/^#/, '');
+    const curHex = smmHexOr(s[settingKey], defClean || fallbackDisplayHex);
+
+    const well = parent.createEl('input', { cls: 'smm-pi-color-well', type: 'color' });
+    well.value = '#' + curHex;
+    well.title = '#' + curHex;
+    well.oninput = async () => {
+      s[settingKey] = smmHexOr(well.value, defClean);
+      well.title = well.value;
+      await this.saveAndRefresh(false);
+    };
+
+    const resetBtn = parent.createEl('button', { cls: 'smm-pi-reset-btn', text: '↺' });
+    resetBtn.title = defClean ? `기본색(#${defClean})으로 복원` : '테마 기본색으로 초기화';
+    resetBtn.onclick = async () => {
+      s[settingKey] = defClean;
+      well.value = '#' + (defClean || fallbackDisplayHex);
+      await this.saveAndRefresh(false);
+    };
+  }
+
+  renderBody() {
+    if (!this.bodyEl) return;
+    this.bodyEl.empty();
+    if (this.activeTab === 'node') {
+      this.renderNodeTab(this.bodyEl);
+    } else if (this.activeTab === 'text') {
+      this.renderTextTab(this.bodyEl);
+    } else {
+      this.renderMarkTab(this.bodyEl);
+    }
+  }
+
+  /* ---------------- 탭 1: 🎨 노드·줄 ---------------- */
+  renderNodeTab(container) {
+    const s = this.plugin.settings;
+    const isDark = this.colorMode === 'dark';
+    const effBodyPx = this.getEffectiveBodySizePx();
+
+    // 1. 문단 종류 (현재 줄 / 선택 줄)
+    const secPara = container.createDiv({ cls: 'smm-pi-section' });
+    const headPara = secPara.createDiv({ cls: 'smm-pi-sec-head' });
+    headPara.createSpan({ text: '문단 종류' });
+    headPara.createSpan({ cls: 'smm-pi-sec-sub', text: '현재 줄 · 선택 줄' });
+
+    const paraGrid = secPara.createDiv({ cls: 'smm-pi-para-grid' });
+    const paraTypes = [
+      { id: 'h1', label: '제목 1' },
+      { id: 'h2', label: '제목 2' },
+      { id: 'h3', label: '제목 3' },
+      { id: 'h4', label: '제목 4' },
+      { id: 'h5', label: '제목 5' },
+      { id: 'h6', label: '제목 6' },
+      { id: 'body', label: '본문' },
+      { id: 'quote', label: '> 인용' },
+    ];
+    for (const pt of paraTypes) {
+      const btn = paraGrid.createEl('button', { cls: 'smm-pi-pill-btn', text: pt.label });
+      btn.onclick = () => this.runOnEditorLines((l) => smmSetLineParagraphType(l, pt.id));
+    }
+
+    // 2. 대지 기호 변경 (현재 줄 / 선택 줄)
+    const secMark = container.createDiv({ cls: 'smm-pi-section' });
+    const headMark = secMark.createDiv({ cls: 'smm-pi-sec-head' });
+    headMark.createSpan({ text: '대지 기호 (줄머리 아이콘)' });
+    const clearMarkBtn = headMark.createEl('button', { cls: 'smm-pi-pill-btn', text: '기호 해제' });
+    clearMarkBtn.style.cssText = 'height: 21px; font-size: 10.5px; padding: 0 7px;';
+    clearMarkBtn.onclick = () => this.runOnEditorLines((l) => smmSetLineMark(l, null));
+
+    const quickMarks = ['✓', '●', '■', '◆', '▶', '★', '※', '◎', '▲', '▼', '○', '□', '◇'];
+    const markGrid = secMark.createDiv({ cls: 'smm-pi-mark-grid' });
+    for (const m of quickMarks) {
+      const mb = markGrid.createEl('button', { cls: 'smm-pi-mark-btn', text: m });
+      mb.title = `현재 줄 기호를 '${m}'(으)로 변경`;
+      mb.onclick = () => this.runOnEditorLines((l) => smmSetLineMark(l, m));
+    }
+    const moreBtn = markGrid.createEl('button', {
+      cls: 'smm-pi-pill-btn' + (this.hanjaExpanded ? ' is-active' : ''),
+      text: this.hanjaExpanded ? '접기▴' : '기타▾',
+    });
+    moreBtn.style.cssText = 'height: 30px; font-size: 10.5px; padding: 0 2px;';
+    moreBtn.title = '윈도우 ㅁ+한자 특수기호 76종 전체 보기';
+    moreBtn.onclick = () => {
+      this.hanjaExpanded = !this.hanjaExpanded;
+      this.renderBody();
+    };
+
+    if (this.hanjaExpanded) {
+      const hanjaGrid = secMark.createDiv({ cls: 'smm-pi-hanja-grid' });
+      for (const hm of SMM_HANJA_M_MARKS) {
+        const hb = hanjaGrid.createEl('button', { cls: 'smm-pi-mark-btn', text: hm });
+        hb.title = hm;
+        hb.onclick = () => this.runOnEditorLines((l) => smmSetLineMark(l, hm));
+      }
+    }
+
+    // 2-1. 숫자 · 글머리 대지 (드롭다운 + 순번 적용 + 해제)
+    const outlineRow = secMark.createDiv({ cls: 'smm-pi-outline-row' });
+    outlineRow.createSpan({ cls: 'smm-pi-outline-label', text: '숫자·글머리' });
+    const outlineSel = outlineRow.createEl('select', { cls: 'smm-pi-outline-select' });
+    const savedStyle = SMM_OUTLINE_STYLES.some((x) => x.id === s.outlineMarkStyle) ? s.outlineMarkStyle : 'num_dot';
+    for (const st of SMM_OUTLINE_STYLES) {
+      const opt = outlineSel.createEl('option', { value: st.id, text: st.label });
+      if (st.id === savedStyle) opt.selected = true;
+    }
+    outlineSel.onchange = async () => {
+      s.outlineMarkStyle = outlineSel.value;
+      await this.plugin.saveSettings();
+    };
+    const applyOutlineBtn = outlineRow.createEl('button', { cls: 'smm-pi-pill-btn smm-pi-outline-apply', text: '순번 적용' });
+    applyOutlineBtn.title = '1줄 선택: 위 형제 번호 다음 순번 / 여러 줄 드래그: 1부터 일괄 번호 매기기 (일반 1. 목록은 리디바탕 유지)';
+    applyOutlineBtn.onclick = () => this.runOutlineOnEditorLines(outlineSel.value);
+    const clearOutlineBtn = outlineRow.createEl('button', { cls: 'smm-pi-pill-btn', text: '해제' });
+    clearOutlineBtn.style.cssText = 'height: 24px; font-size: 11px; padding: 0 7px;';
+    clearOutlineBtn.title = '숫자·글머리 기호 제거 (기본 ✓ 대지로 복귀)';
+    clearOutlineBtn.onclick = () => this.runOutlineOnEditorLines(null);
+
+    // 3. 단어 강조색 (==text== 형광펜)
+    const secHl = container.createDiv({ cls: 'smm-pi-section' });
+    const headHl = secHl.createDiv({ cls: 'smm-pi-sec-head' });
+    headHl.createSpan({ text: '단어 강조색 (==text==)' });
+    const clearHlBtn = headHl.createEl('button', { cls: 'smm-pi-pill-btn', text: '강조 해제' });
+    clearHlBtn.style.cssText = 'height: 21px; font-size: 10.5px; padding: 0 7px;';
+    clearHlBtn.title = '선택 영역 · 커서 위치 · 현재 줄의 ==강조== 해제';
+    clearHlBtn.onclick = () => this.runHighlightColor('clear');
+
+    const hlPalette = [
+      { key: 'yellow', label: '노랑', hex: '#FFF3A3', darkRgba: 'rgba(242,201,76,0.42)' },
+      { key: 'orange', label: '주황', hex: '#FFD6A5', darkRgba: 'rgba(242,153,74,0.45)' },
+      { key: 'red',    label: '빨강', hex: '#FFC2C2', darkRgba: 'rgba(235,87,87,0.45)' },
+      { key: 'green',  label: '초록', hex: '#BFEBC4', darkRgba: 'rgba(111,207,151,0.45)' },
+      { key: 'blue',   label: '파랑', hex: '#BDE0FF', darkRgba: 'rgba(86,204,242,0.45)' },
+      { key: 'purple', label: '보라', hex: '#DCCBFF', darkRgba: 'rgba(155,81,224,0.45)' },
+    ];
+    const hlGrid = secHl.createDiv({ cls: 'smm-pi-hl-grid' });
+    for (const h of hlPalette) {
+      const hb = hlGrid.createEl('button', { cls: 'smm-pi-hl-swatch', text: h.label });
+      hb.style.background = isDark ? h.darkRgba : h.hex;
+      hb.title = `==${SMM_CMD_HL_MAP[h.key] ? SMM_CMD_HL_MAP[h.key].emoji : ''}강조== (${h.label} 형광펜 적용 · 색상 변경)`;
+      hb.onclick = () => this.runHighlightColor(h.key);
+    }
+
+    // 4. 노드 배경 음영 (6색 × 3단계)
+    const secShade = container.createDiv({ cls: 'smm-pi-section' });
+    const headShade = secShade.createDiv({ cls: 'smm-pi-sec-head' });
+    headShade.createSpan({ text: '노드 배경 음영 (명암)' });
+    const clearShadeBtn = headShade.createEl('button', { cls: 'smm-pi-pill-btn', text: '음영 해제' });
+    clearShadeBtn.style.cssText = 'height: 21px; font-size: 10.5px; padding: 0 7px;';
+    clearShadeBtn.onclick = () => this.runOnEditorLines(smmClearNodeShade);
+
+    const shadePalette = [
+      { code: 'y', label: '노랑', hexes: ['#FFF9D1', '#FFF3A3', '#FFE066'], darkRgba: ['rgba(242,201,76,0.22)', 'rgba(242,201,76,0.36)', 'rgba(242,201,76,0.52)'] },
+      { code: 'o', label: '주황', hexes: ['#FFEAD2', '#FFD6A5', '#FFBE73'], darkRgba: ['rgba(242,153,74,0.22)', 'rgba(242,153,74,0.36)', 'rgba(242,153,74,0.52)'] },
+      { code: 'r', label: '빨강', hexes: ['#FFE0E0', '#FFC2C2', '#FF9F9F'], darkRgba: ['rgba(235,87,87,0.22)', 'rgba(235,87,87,0.36)', 'rgba(235,87,87,0.52)'] },
+      { code: 'g', label: '초록', hexes: ['#DFF5E2', '#BFEBC4', '#8FD99B'], darkRgba: ['rgba(111,207,151,0.22)', 'rgba(111,207,151,0.36)', 'rgba(111,207,151,0.52)'] },
+      { code: 'b', label: '파랑', hexes: ['#DEF0FF', '#BDE0FF', '#8CC8FF'], darkRgba: ['rgba(86,204,242,0.22)', 'rgba(86,204,242,0.36)', 'rgba(86,204,242,0.52)'] },
+      { code: 'p', label: '보라', hexes: ['#EEE5FF', '#DCCBFF', '#BFA6FF'], darkRgba: ['rgba(155,81,224,0.22)', 'rgba(155,81,224,0.36)', 'rgba(155,81,224,0.52)'] },
+    ];
+    const matrix = secShade.createDiv({ cls: 'smm-pi-shade-matrix' });
+    for (const col of shadePalette) {
+      const colEl = matrix.createDiv({ cls: 'smm-pi-shade-col' });
+      colEl.createDiv({ cls: 'smm-pi-shade-col-label', text: col.label });
+      for (let lv = 1; lv <= 3; lv++) {
+        const sw = colEl.createEl('button', { cls: 'smm-pi-shade-swatch', text: String(lv) });
+        sw.style.background = isDark ? col.darkRgba[lv - 1] : col.hexes[lv - 1];
+        sw.title = `${col.label} ${lv}단계`;
+        sw.onclick = () => {
+          this.runOnEditorLines((l) => l.replace(SMM_SHADE_RE, '') + ` %%shade:${col.code}${lv}%%`);
+        };
+      }
+    }
+
+    // 5. 대지(✓) 줄 전체 서식 (글꼴 · 크기 · 기호색 · 문장색)
+    const secStrong = container.createDiv({ cls: 'smm-pi-section' });
+    const headStrong = secStrong.createDiv({ cls: 'smm-pi-sec-head' });
+    headStrong.createSpan({ text: '대지(✓) 줄 문장 · 기호 스타일' });
+    headStrong.createSpan({ cls: 'smm-pi-sec-sub', text: isDark ? '🌙 다크 기준' : '☀️ 라이트 기준' });
+
+    const rFont = secStrong.createDiv({ cls: 'smm-pi-row' });
+    rFont.createSpan({ cls: 'smm-pi-label', text: '대지 줄 글꼴' });
+    const cFont = rFont.createDiv({ cls: 'smm-pi-controls' });
+    this.createFontSelect(cFont, 'markLineFont', '본문 글꼴 그대로');
+
+    const rSize = secStrong.createDiv({ cls: 'smm-pi-row' });
+    rSize.createSpan({ cls: 'smm-pi-label', text: '대지 줄 글자 크기 (px)' });
+    const cSize = rSize.createDiv({ cls: 'smm-pi-controls' });
+    const stMarkSize = this.createStepper(cSize, {
+      value: s.markLineSize,
+      placeholder: `기본 ${effBodyPx}`,
+      step: 1,
+      min: 10,
+      max: 60,
+      onChange: async (v) => {
+        s.markLineSize = v;
+        await this.saveAndRefresh(false);
+      },
+    });
+    const rstMarkSize = cSize.createEl('button', { cls: 'smm-pi-reset-btn', text: '↺' });
+    rstMarkSize.title = `기본 크기(${effBodyPx}px)로 초기화`;
+    rstMarkSize.onclick = async () => {
+      s.markLineSize = '';
+      stMarkSize.setValue('');
+      await this.saveAndRefresh(false);
+    };
+
+    const rColor = secStrong.createDiv({ cls: 'smm-pi-row' });
+    rColor.createSpan({ cls: 'smm-pi-label', text: '기호 색 / 줄 글자색' });
+    const cColor = rColor.createDiv({ cls: 'smm-pi-controls' });
+    cColor.createSpan({ cls: 'smm-pi-sec-sub', text: '기호' });
+    this.createColorControl(cColor, 'markStrongColor', 'BF4E14', 'BF4E14');
+    cColor.createSpan({ cls: 'smm-pi-sec-sub', text: '문장' });
+    if (isDark) {
+      this.createColorControl(cColor, 'markStrongTextColor', 'E8D9A0', 'E8D9A0');
+    } else {
+      this.createColorControl(cColor, 'markStrongLightTextColor', '', this.getDefaultNormalHex());
+    }
+  }
+
+  /* ---------------- 탭 2: 🔤 글자·제목 ---------------- */
+  renderTextTab(container) {
+    const s = this.plugin.settings;
+    const isDark = this.colorMode === 'dark';
+    const defBodyPx = this.getDefaultBodySizePx();
+    const effBodyPx = this.getEffectiveBodySizePx();
+    const headingSteppers = [];
+    let stVerseSz = null;
+
+    const refreshDynamicPlaceholders = () => {
+      const nextEff = this.getEffectiveBodySizePx();
+      for (const hs of headingSteppers) {
+        hs.stepper.setPlaceholder(`기본 ${this.getDefaultHeadingSizePx(hs.lv)}`);
+      }
+      if (stVerseSz) {
+        stVerseSz.setPlaceholder(`기본 ${nextEff}`);
+      }
+    };
+
+    // 1. 본문 크기 · 행간 · 여백
+    const secSpace = container.createDiv({ cls: 'smm-pi-section' });
+    const headSpace = secSpace.createDiv({ cls: 'smm-pi-sec-head' });
+    headSpace.createSpan({ text: '본문 크기 · 행간 · 여백' });
+    headSpace.createSpan({ cls: 'smm-pi-sec-sub', text: '전체 설교문' });
+
+    // 본문 기본 크기
+    const rBodySz = secSpace.createDiv({ cls: 'smm-pi-row' });
+    rBodySz.createSpan({ cls: 'smm-pi-label', text: '본문 기본 크기 (px)' });
+    const cBodySz = rBodySz.createDiv({ cls: 'smm-pi-controls' });
+    const stBodySz = this.createStepper(cBodySz, {
+      value: s.edSizeBody,
+      placeholder: `기본 ${defBodyPx}`,
+      step: 1,
+      min: 11,
+      max: 48,
+      onChange: async (v) => {
+        s.edSizeBody = v;
+        refreshDynamicPlaceholders();
+        await this.saveAndRefresh(false);
+      },
+    });
+    const rstBodySz = cBodySz.createEl('button', { cls: 'smm-pi-reset-btn', text: '↺' });
+    rstBodySz.title = `옵시디언 기본 글자 크기(${defBodyPx}px)로 복원`;
+    rstBodySz.onclick = async () => {
+      s.edSizeBody = '';
+      stBodySz.setValue('');
+      refreshDynamicPlaceholders();
+      await this.saveAndRefresh(false);
+    };
+
+    // 전체 글자 행간
+    const rLh = secSpace.createDiv({ cls: 'smm-pi-row' });
+    rLh.createSpan({ cls: 'smm-pi-label', text: '전체 글자 행간' });
+    const cLh = rLh.createDiv({ cls: 'smm-pi-controls' });
+    cLh.style.cssText = 'flex: 1 1 auto; min-width: 0; justify-content: flex-end;';
+    const lhRange = cLh.createEl('input', { cls: 'smm-pi-range', type: 'range' });
+    lhRange.style.cssText = 'width: 52px !important; min-width: 0 !important; max-width: 52px !important; flex: 0 1 52px !important; margin: 0 !important; padding: 0 !important;';
+    lhRange.min = '1.2';
+    lhRange.max = '2.5';
+    lhRange.step = '0.05';
+    lhRange.value = String(smmNumOr(s.edLineHeight, 1.75));
+    const stLh = this.createStepper(cLh, {
+      value: s.edLineHeight,
+      placeholder: '기본 1.75',
+      step: 0.05,
+      min: 1.0,
+      max: 3.5,
+      isFloat: true,
+      onChange: async (v) => {
+        s.edLineHeight = v;
+        lhRange.value = String(smmNumOr(v, 1.75));
+        await this.saveAndRefresh(false);
+      },
+    });
+    lhRange.oninput = async () => {
+      const v = Math.round(parseFloat(lhRange.value) * 100) / 100;
+      s.edLineHeight = v;
+      stLh.setValue(v);
+      await this.saveAndRefresh(false);
+    };
+    const rstLh = cLh.createEl('button', { cls: 'smm-pi-reset-btn', text: '↺' });
+    rstLh.title = '기본 행간(1.75)으로 복원';
+    rstLh.onclick = async () => {
+      s.edLineHeight = '';
+      stLh.setValue('');
+      lhRange.value = '1.75';
+      await this.saveAndRefresh(false);
+    };
+
+    // 대지(V) 항목 아래 여백
+    const rGap = secSpace.createDiv({ cls: 'smm-pi-row' });
+    rGap.createSpan({ cls: 'smm-pi-label', text: '대지(✓) 아래 여백' });
+    const cGap = rGap.createDiv({ cls: 'smm-pi-controls' });
+    cGap.style.cssText = 'flex: 1 1 auto; min-width: 0; justify-content: flex-end;';
+    const gapRange = cGap.createEl('input', { cls: 'smm-pi-range', type: 'range' });
+    gapRange.style.cssText = 'width: 52px !important; min-width: 0 !important; max-width: 52px !important; flex: 0 1 52px !important; margin: 0 !important; padding: 0 !important;';
+    gapRange.min = '0';
+    gapRange.max = '32';
+    gapRange.step = '1';
+    gapRange.value = String(smmNumOr(s.edParaGap, 0));
+    const stGap = this.createStepper(cGap, {
+      value: s.edParaGap,
+      placeholder: '기본 0',
+      step: 2,
+      min: 0,
+      max: 80,
+      onChange: async (v) => {
+        s.edParaGap = v;
+        gapRange.value = String(smmNumOr(v, 0));
+        await this.saveAndRefresh(false);
+      },
+    });
+    gapRange.oninput = async () => {
+      const v = parseInt(gapRange.value, 10) || 0;
+      s.edParaGap = v > 0 ? v : '';
+      stGap.setValue(s.edParaGap);
+      await this.saveAndRefresh(false);
+    };
+    const rstGap = cGap.createEl('button', { cls: 'smm-pi-reset-btn', text: '↺' });
+    rstGap.title = '기본 여백(0)으로 복원';
+    rstGap.onclick = async () => {
+      s.edParaGap = '';
+      stGap.setValue('');
+      gapRange.value = '0';
+      await this.saveAndRefresh(false);
+    };
+
+    // 2. 제목 (H1 ~ H6) 글꼴 · 크기 · 색상
+    const secHead = container.createDiv({ cls: 'smm-pi-section' });
+    const headH = secHead.createDiv({ cls: 'smm-pi-sec-head' });
+    headH.createSpan({ text: '제목 (H1 ~ H6) 크기 · 색상' });
+    headH.createSpan({ cls: 'smm-pi-sec-sub', text: isDark ? '🌙 다크 색상' : '☀️ 라이트 색상' });
+
+    const rHFont = secHead.createDiv({ cls: 'smm-pi-row' });
+    rHFont.createSpan({ cls: 'smm-pi-label', text: '제목 전용 글꼴' });
+    const cHFont = rHFont.createDiv({ cls: 'smm-pi-controls' });
+    this.createFontSelect(cHFont, 'rdFontHead', '본문 글꼴 그대로');
+
+    for (let lv = 1; lv <= 6; lv++) {
+      const colorKey = isDark ? ('edColorDarkH' + lv) : ('edColorH' + lv);
+      const defHex = isDark ? M_COLOR_H_DARK[lv - 1] : M_COLOR_H_LIGHT[lv - 1];
+      const sizeKey = 'edSizeH' + lv;
+      const defHPx = this.getDefaultHeadingSizePx(lv);
+
+      const hRow = secHead.createDiv({ cls: 'smm-pi-h-row' });
+      const badge = hRow.createDiv({ cls: 'smm-pi-h-badge', text: 'H' + lv });
+      badge.style.color = '#' + smmHexOr(s[colorKey], defHex);
+
+      const ctrlWrap = hRow.createDiv({ cls: 'smm-pi-controls' });
+      const well = ctrlWrap.createEl('input', { cls: 'smm-pi-color-well', type: 'color' });
+      well.value = '#' + smmHexOr(s[colorKey], defHex);
+      well.title = '#' + smmHexOr(s[colorKey], defHex);
+      well.oninput = async () => {
+        s[colorKey] = smmHexOr(well.value, defHex);
+        well.title = '#' + s[colorKey];
+        badge.style.color = '#' + s[colorKey];
+        await this.saveAndRefresh(false);
+      };
+
+      const stHSz = this.createStepper(ctrlWrap, {
+        value: s[sizeKey],
+        placeholder: `기본 ${defHPx}`,
+        step: 1,
+        min: 12,
+        max: 64,
+        onChange: async (v) => {
+          s[sizeKey] = v;
+          await this.saveAndRefresh(false);
+        },
+      });
+      headingSteppers.push({ lv, stepper: stHSz });
+
+      const rstBtn = ctrlWrap.createEl('button', { cls: 'smm-pi-reset-btn', text: '↺' });
+      rstBtn.title = `H${lv} 색상(#${defHex}) · 크기(기본 ${defHPx}px) 복원`;
+      rstBtn.onclick = async () => {
+        s[colorKey] = defHex;
+        s[sizeKey] = '';
+        well.value = '#' + defHex;
+        well.title = '#' + defHex;
+        badge.style.color = '#' + defHex;
+        stHSz.setValue('');
+        stHSz.setPlaceholder(`기본 ${this.getDefaultHeadingSizePx(lv)}`);
+        await this.saveAndRefresh(false);
+      };
+    }
+
+    // 3. 성경구절 · 인용문(>) 스타일
+    const secVerse = container.createDiv({ cls: 'smm-pi-section' });
+    const headVerse = secVerse.createDiv({ cls: 'smm-pi-sec-head' });
+    headVerse.createSpan({ text: '성경구절 · 인용문(>)' });
+    headVerse.createSpan({ cls: 'smm-pi-sec-sub', text: isDark ? '🌙 다크 기준' : '☀️ 라이트 기준' });
+
+    const rVfToggle = secVerse.createDiv({ cls: 'smm-pi-row' });
+    rVfToggle.createSpan({ cls: 'smm-pi-label', text: '성경구절 전용 글꼴' });
+    const cVfToggle = rVfToggle.createDiv({ cls: 'smm-pi-controls' });
+    const vfChk = cVfToggle.createEl('input', { type: 'checkbox' });
+    vfChk.checked = !!s.edVerseFont;
+    vfChk.onchange = async () => {
+      s.edVerseFont = vfChk.checked;
+      await this.saveAndRefresh(false);
+      try { smmPaintAllVerses(this.plugin); } catch (e) { /* 무시 */ }
+    };
+    this.createFontSelect(cVfToggle, 'mmFontVerse', 'Freesentation 7 (기본)');
+
+    const rVSz = secVerse.createDiv({ cls: 'smm-pi-row' });
+    rVSz.createSpan({ cls: 'smm-pi-label', text: '구절 크기 / 글자색' });
+    const cVSz = rVSz.createDiv({ cls: 'smm-pi-controls' });
+    const verseColorKey = isDark ? 'edColorDarkVerse' : 'edColorVerse';
+    const defVerseFallbackHex = this.getDefaultNormalHex();
+    const curVerseHex = smmHexOr(s[verseColorKey], defVerseFallbackHex);
+
+    const verseWell = cVSz.createEl('input', { cls: 'smm-pi-color-well', type: 'color' });
+    verseWell.value = '#' + curVerseHex;
+    verseWell.title = s[verseColorKey] ? ('#' + curVerseHex) : `테마 기본색 (#${defVerseFallbackHex})`;
+    verseWell.oninput = async () => {
+      s[verseColorKey] = smmHexOr(verseWell.value, '');
+      verseWell.title = '#' + s[verseColorKey];
+      await this.saveAndRefresh(false);
+    };
+
+    stVerseSz = this.createStepper(cVSz, {
+      value: s.edVerseSize,
+      placeholder: `기본 ${effBodyPx}`,
+      step: 1,
+      min: 10,
+      max: 48,
+      onChange: async (v) => {
+        s.edVerseSize = v;
+        await this.saveAndRefresh(false);
+      },
+    });
+
+    const rstVerse = cVSz.createEl('button', { cls: 'smm-pi-reset-btn', text: '↺' });
+    rstVerse.title = `성경구절 크기(기본 ${effBodyPx}px) 및 글자색 기본값 복원`;
+    rstVerse.onclick = async () => {
+      s.edVerseSize = '';
+      s[verseColorKey] = '';
+      stVerseSz.setValue('');
+      stVerseSz.setPlaceholder(`기본 ${this.getEffectiveBodySizePx()}`);
+      const fb = this.getDefaultNormalHex();
+      verseWell.value = '#' + fb;
+      verseWell.title = `테마 기본색 (#${fb})`;
+      await this.saveAndRefresh(false);
+    };
+
+    const rQCol = secVerse.createDiv({ cls: 'smm-pi-row' });
+    rQCol.createSpan({ cls: 'smm-pi-label', text: '> 인용문 글자색' });
+    const cQCol = rQCol.createDiv({ cls: 'smm-pi-controls' });
+    this.createColorControl(cQCol, isDark ? 'edColorDarkQuote' : 'edColorQuote', '', isDark ? '7FB0FF' : '00558A');
+  }
+
+  /* ---------------- 탭 3: ⚙️ 기호·연동 ---------------- */
+  renderMarkTab(container) {
+    const s = this.plugin.settings;
+    const effBodyPx = this.getEffectiveBodySizePx();
+    const defMarkPx = Math.round(effBodyPx * 0.85);
+
+    // 1. 문서 전체 단계별 기본 기호
+    const secDefMark = container.createDiv({ cls: 'smm-pi-section' });
+    const headDefMark = secDefMark.createDiv({ cls: 'smm-pi-sec-head' });
+    headDefMark.createSpan({ text: '단계별 기본 기호 (문서 전체)' });
+
+    const rShowV = secDefMark.createDiv({ cls: 'smm-pi-row' });
+    rShowV.createSpan({ cls: 'smm-pi-label', text: '몸말 줄 깊이 기호 표시' });
+    const cShowV = rShowV.createDiv({ cls: 'smm-pi-controls' });
+    const chkShowV = cShowV.createEl('input', { type: 'checkbox' });
+    chkShowV.checked = s.edShowVMark !== false;
+    chkShowV.onchange = async () => {
+      s.edShowVMark = chkShowV.checked;
+      await this.saveAndRefresh(true);
+    };
+
+    const makeIconRow = (label, key, presets, defIcon) => {
+      const row = secDefMark.createDiv({ cls: 'smm-pi-row' });
+      row.createSpan({ cls: 'smm-pi-label', text: label });
+      const ctrls = row.createDiv({ cls: 'smm-pi-controls' });
+      for (const ic of presets) {
+        const b = ctrls.createEl('button', {
+          cls: 'smm-pi-pill-btn' + ((s[key] || defIcon) === ic ? ' is-active' : ''),
+          text: ic,
+        });
+        b.style.cssText = 'width: 26px; height: 24px; padding: 0; font-size: 13px;';
+        b.onclick = async () => {
+          s[key] = ic;
+          await this.saveAndRefresh(true);
+          this.renderBody();
+        };
+      }
+    };
+
+    makeIconRow('1단계 (대지)', 'markStrongIcon', ['✓', '●', '■', '◆', '▶', '★', '※'], '✓');
+    makeIconRow('2단계 (소지)', 'markMidIcon', ['ㆍ', '○', '□', '◇', '-', '▷'], 'ㆍ');
+    makeIconRow('3단계 (세부)', 'markSubIcon', ['-', '·', '▪', '▫'], '-');
+
+    const rMarkSz = secDefMark.createDiv({ cls: 'smm-pi-row' });
+    rMarkSz.createSpan({ cls: 'smm-pi-label', text: '깊이 기호 크기 (px)' });
+    const cMarkSz = rMarkSz.createDiv({ cls: 'smm-pi-controls' });
+    const stEdMarkSz = this.createStepper(cMarkSz, {
+      value: smmNumOr(s.edMarkSize, 0) >= 6 ? s.edMarkSize : '',
+      placeholder: `기본 ${defMarkPx}`,
+      step: 1,
+      min: 8,
+      max: 40,
+      onChange: async (v) => {
+        s.edMarkSize = v;
+        await this.saveAndRefresh(false);
+      },
+    });
+    const rstEdMarkSz = cMarkSz.createEl('button', { cls: 'smm-pi-reset-btn', text: '↺' });
+    rstEdMarkSz.title = `기본 기호 크기(${defMarkPx}px)로 복원`;
+    rstEdMarkSz.onclick = async () => {
+      s.edMarkSize = '';
+      stEdMarkSz.setValue('');
+      await this.saveAndRefresh(false);
+    };
+
+    // 2. 편집 화면 커서
+    const secCaret = container.createDiv({ cls: 'smm-pi-section' });
+    secCaret.createDiv({ cls: 'smm-pi-sec-head', text: '편집 화면 커서' });
+
+    const rCaretOn = secCaret.createDiv({ cls: 'smm-pi-row' });
+    rCaretOn.createSpan({ cls: 'smm-pi-label', text: '장절·형광펜 위 커서 강조' });
+    const cCaretOn = rCaretOn.createDiv({ cls: 'smm-pi-controls' });
+    const chkCaret = cCaretOn.createEl('input', { type: 'checkbox' });
+    chkCaret.checked = s.edCaretContrast !== false;
+    chkCaret.onchange = async () => {
+      s.edCaretContrast = chkCaret.checked;
+      await this.saveAndRefresh(false);
+    };
+
+    const rCaretStyle = secCaret.createDiv({ cls: 'smm-pi-row' });
+    rCaretStyle.createSpan({ cls: 'smm-pi-label', text: '커서 색상 / 굵기(px)' });
+    const cCaretStyle = rCaretStyle.createDiv({ cls: 'smm-pi-controls' });
+    const selCaret = cCaretStyle.createEl('select', { cls: 'smm-pi-select' });
+    selCaret.style.maxWidth = '92px';
+    const caretOpts = [
+      { id: 'red', label: '빨강' },
+      { id: 'auto', label: '자동 반전' },
+      { id: 'magenta', label: '자홍' },
+      { id: 'orange', label: '주황' },
+      { id: 'blue', label: '파랑' },
+      { id: 'black', label: '검정' },
+    ];
+    for (const co of caretOpts) {
+      const o = selCaret.createEl('option', { value: co.id, text: co.label });
+      if ((s.edCaretMode || 'red') === co.id) o.selected = true;
+    }
+    selCaret.onchange = async () => {
+      s.edCaretMode = selCaret.value;
+      await this.saveAndRefresh(false);
+    };
+    const stCaretW = this.createStepper(cCaretStyle, {
+      value: s.edCaretWidth === 3 ? '' : s.edCaretWidth,
+      placeholder: '기본 3',
+      step: 1,
+      min: 1,
+      max: 8,
+      onChange: async (v) => {
+        s.edCaretWidth = v === '' ? 3 : v;
+        await this.saveAndRefresh(false);
+      },
+    });
+    const rstCaretW = cCaretStyle.createEl('button', { cls: 'smm-pi-reset-btn', text: '↺' });
+    rstCaretW.title = '커서 기본값(빨강, 3px) 복원';
+    rstCaretW.onclick = async () => {
+      s.edCaretMode = 'red';
+      s.edCaretWidth = 3;
+      selCaret.value = 'red';
+      stCaretW.setValue('');
+      await this.saveAndRefresh(false);
+    };
+
+    // 3. 다른 화면과 색상 연동
+    const secSync = container.createDiv({ cls: 'smm-pi-section' });
+    secSync.createDiv({ cls: 'smm-pi-sec-head', text: '다른 화면 색상 연동' });
+
+    const syncItems = [
+      { key: 'mmSyncColors', label: '마인드맵 색상 일치', def: true },
+      { key: 'rdSyncHeadColor', label: '강대상 제목 색상 일치', def: false },
+      { key: 'rdSyncVerseColor', label: '강대상 성경·인용 색상 일치', def: false },
+      { key: 'docxSyncColors', label: '워드(.docx) 제목 색상 일치', def: false },
+      { key: 'docxSyncVerseColor', label: '워드(.docx) 성경·인용 색상 일치', def: false },
+    ];
+    for (const item of syncItems) {
+      const row = secSync.createDiv({ cls: 'smm-pi-row' });
+      row.createSpan({ cls: 'smm-pi-label', text: item.label });
+      const ctrls = row.createDiv({ cls: 'smm-pi-controls' });
+      const chk = ctrls.createEl('input', { type: 'checkbox' });
+      chk.checked = item.def ? (s[item.key] !== false) : !!s[item.key];
+      chk.onchange = async () => {
+        s[item.key] = chk.checked;
+        await this.saveAndRefresh(false);
+      };
+    }
+
+    // 4. 오타 자동고침 (자동 대치)
+    const secAc = container.createDiv({ cls: 'smm-pi-section' });
+    secAc.createDiv({ cls: 'smm-pi-sec-head', text: '오타 자동고침 (자동 대치)' });
+
+    const rAcOn = secAc.createDiv({ cls: 'smm-pi-row' });
+    rAcOn.createSpan({ cls: 'smm-pi-label', text: '오타 자동고침 켜기' });
+    const cAcOn = rAcOn.createDiv({ cls: 'smm-pi-controls' });
+    const chkAc = cAcOn.createEl('input', { type: 'checkbox' });
+    chkAc.checked = s.edAutocorrectEnabled !== false;
+    chkAc.onchange = async () => {
+      s.edAutocorrectEnabled = chkAc.checked;
+      await this.plugin.saveData(s);
+    };
+
+    const rAcPre = secAc.createDiv({ cls: 'smm-pi-row' });
+    rAcPre.createSpan({ cls: 'smm-pi-label', text: '조사 결합 자동 인식' });
+    const cAcPre = rAcPre.createDiv({ cls: 'smm-pi-controls' });
+    const chkAcPre = cAcPre.createEl('input', { type: 'checkbox' });
+    chkAcPre.checked = s.edAutocorrectPrefixMatch !== false;
+    chkAcPre.onchange = async () => {
+      s.edAutocorrectPrefixMatch = chkAcPre.checked;
+      await this.plugin.saveData(s);
+    };
+
+    const ruleCount = Object.keys(s.edAutocorrectRules || {}).length;
+    const acBtn = secAc.createEl('button', {
+      cls: 'smm-pi-pill-btn',
+      text: `✨ 오타 자동고침 단어장 관리 (${ruleCount}개)...`,
+    });
+    acBtn.style.cssText = 'width: 100%; margin-top: 4px;';
+    acBtn.onclick = () => {
+      const ed = this.getTargetEditor();
+      let initTypo = '';
+      try {
+        if (ed && ed.somethingSelected()) {
+          const sel = String(ed.getSelection() || '').trim();
+          if (sel && !/\s/.test(sel) && sel.length <= 25) initTypo = sel;
+        }
+      } catch (e) { /* 무시 */ }
+      new SmmAutocorrectModal(this.app, this.plugin, initTypo, (rep) => {
+        if (ed && ed.somethingSelected()) ed.replaceSelection(rep);
+      }).open();
+    };
+  }
 }
 
 /** 컴퓨터에 설치된 글꼴 중에서 검색해 고르는 창 */
@@ -4758,6 +7080,15 @@ class SermonMindmapSettingTab extends PluginSettingTab {
     colorRow('본문 색상', '색상 상자를 눌러서 눈으로 보고 고르세요.', 'docxColorBody', '000000', secDocx);
 
     subhead('제목', secDocx);
+    new Setting(secDocx)
+      .setName('제목 색상을 편집 화면(밝은 테마)과 일치')
+      .setDesc('켜면 워드 내보내기 시 아래 제목 색상 대신 "설교문(편집) 화면"의 밝은 테마 제목 1~6단계 색상을 그대로 씁니다.')
+      .addToggle((tg) =>
+        tg.setValue(!!this.plugin.settings.docxSyncColors).onChange(async (v) => {
+          this.plugin.settings.docxSyncColors = v;
+          await this.plugin.saveSettings();
+        })
+      );
     sizeRow('제목 크기 (pt)', '제목1(#)의 크기입니다. 제목2부터 1pt씩 작아지고 제목5·6은 같은 크기입니다. 비워두면 16pt이며, 그러면 제목1~6이 16 / 15 / 14 / 13 / 12 / 12pt가 됩니다.', 'docxSizeHead', '자동(16)', secDocx);
     {
       const hc = subsection('제목 1~6단계 색상', secDocx);
@@ -4769,9 +7100,19 @@ class SermonMindmapSettingTab extends PluginSettingTab {
       colorRow('제목 6단계 색상 (######)', '기본값은 "설교문 읽기 모드" 미리보기와 같습니다.', 'docxColorH6', M_COLOR_H6, hc);
     }
 
-    subhead('성경구절', secDocx);
-    sizeRow('성경구절 크기 (pt)', '비워두면 아래 "기본 글자 크기"를 그대로 씁니다.', 'docxSizeVerse', '자동(기본 크기)', secDocx);
-    colorRow('성경구절 색상', '색상 상자를 눌러서 눈으로 보고 고르세요.', 'docxColorVerse', M_COLOR_VERSE, secDocx);
+    subhead('성경구절 및 인용문(>)', secDocx);
+    new Setting(secDocx)
+      .setName('성경구절/인용 색상을 편집 화면(밝은 테마)과 일치')
+      .setDesc('켜면 워드 내보내기 시 아래 성경구절·인용 색상 대신 "설교문(편집) 화면"의 성경구절 및 인용문(>) 색상을 그대로 씁니다. (비어 있으면 본문 색상 사용)')
+      .addToggle((tg) =>
+        tg.setValue(!!this.plugin.settings.docxSyncVerseColor).onChange(async (v) => {
+          this.plugin.settings.docxSyncVerseColor = v;
+          await this.plugin.saveSettings();
+        })
+      );
+    sizeRow('성경구절·인용문 크기 (pt)', '비워두면 아래 "기본 글자 크기"를 그대로 씁니다.', 'docxSizeVerse', '자동(기본 크기)', secDocx);
+    colorRow('성경구절 색상', '`>` 없는 일반 성경구절 줄의 색상입니다.', 'docxColorVerse', '000000', secDocx);
+    colorRow('인용문(>) 색상', '`>`로 시작하는 인용 줄의 색상입니다.', 'docxColorQuote', '00558A', secDocx);
 
     new Setting(secDocx)
       .setName('기본 글자 크기 (pt)')
@@ -4792,6 +7133,17 @@ class SermonMindmapSettingTab extends PluginSettingTab {
       text: '마인드맵의 글꼴·글자 크기·글자색은 편집 화면을 그대로 따릅니다(본문, 제목 1~4단계, 성경구절, ✓ 줄 모두). 그래서 여기서는 바꿀 수 없고, 바꾸려면 옵시디언 설정(외형/테마)이나 아래 "설교문(편집) 화면"에서 바꾸면 마인드맵도 함께 바뀝니다. 여기서는 노드 상자의 너비와 미리보기 줄 수만 정합니다.',
     }).style.cssText = 'color: var(--text-muted); font-size: 12px; margin-bottom: 8px;';
 
+    new Setting(secMap)
+      .setName('편집 화면 색상과 일치')
+      .setDesc('켜면 "설교문(편집) 화면"에서 설정한 제목 및 성경구절 글자 색상을 마인드맵 노드에도 똑같이 반영합니다.')
+      .addToggle((tg) =>
+        tg.setValue(this.plugin.settings.mmSyncColors !== false).onChange(async (v) => {
+          this.plugin.settings.mmSyncColors = v;
+          await this.plugin.saveSettings();
+          this.plugin.updateMmStyleVars();
+        })
+      );
+
     subhead('본문 노드 상자', secMap);
     sizeRow('본문 너비 (px)', '본문(문단) 노드 상자의 최대 너비. 넓힐수록 한 줄에 더 많은 글자가 들어갑니다.', 'mmWidthBody', '420(기본)', secMap);
     sizeRow('미리보기 줄 수 (본문)', '본문(문단) 노드는 편집하지 않을 때 이 줄 수까지만 보여주고 "···"로 줄입니다(더블클릭하면 항상 전체가 보입니다).', 'mmClampBody', '8(기본)', secMap);
@@ -4803,6 +7155,89 @@ class SermonMindmapSettingTab extends PluginSettingTab {
     secEdit.createEl('p', {
       text: '설교문을 쓰는 화면입니다. 여기 설정은 옵시디언 읽기 보기와 마인드맵에도 똑같이 적용됩니다. 성경구절은 "(창 1:1) …" 처럼 장절로 시작하는 줄과 \'>\' 인용 줄이 대상입니다.',
     }).style.cssText = 'color: var(--text-muted); font-size: 12px; margin-bottom: 8px;';
+
+    subhead('글자 크기 · 행간 및 여백', secEdit);
+    sizeRow('기본 본문 글자 크기 (px)', '편집 화면과 옵시디언 기본 읽기 보기의 본문 기본 글자 크기입니다. 비워두면 옵시디언 외형 설정의 글자 크기를 그대로 씁니다.', 'edSizeBody', '기본 크기', secEdit);
+    new Setting(secEdit)
+      .setName('전체 글자 행간')
+      .setDesc('글줄 자체의 높이 배율입니다 (예: 1.6~2.0). 비워두면 1.75입니다. 편집 화면, 읽기 모드, 강대상 모드, 워드 내보내기에 모두 적용됩니다.')
+      .addText((text) =>
+        text
+          .setPlaceholder('1.75(기본)')
+          .setValue(this.plugin.settings.edLineHeight === '' || this.plugin.settings.edLineHeight == null ? '' : String(this.plugin.settings.edLineHeight))
+          .onChange(async (value) => {
+            const v = String(value || '').trim();
+            if (!v) {
+              this.plugin.settings.edLineHeight = '';
+            } else {
+              const n = parseFloat(v);
+              this.plugin.settings.edLineHeight = Number.isFinite(n) && n > 0 ? n : '';
+            }
+            await this.plugin.saveSettings();
+            this.plugin.refreshReaders();
+            try { this.app.workspace.updateOptions(); } catch (e) { /* 무시 */ }
+          })
+      );
+
+    new Setting(secEdit)
+      .setName('V 항목 아래 여백 (px)')
+      .setDesc('V(체크) 표시가 붙는 상위 항목 아래쪽 여백(px)입니다. V 항목과 그 뒤에 이어지는 하위 항목(ㆍ) 또는 다음 단락 사이에 구분 간격이 생깁니다. 비워두면 기본 간격입니다. 편집 화면, 읽기 모드, 강대상 모드, 워드 내보내기에 모두 적용됩니다.')
+      .addText((text) =>
+        text
+          .setPlaceholder('비우면 기본')
+          .setValue(this.plugin.settings.edParaGap === '' || this.plugin.settings.edParaGap == null ? '' : String(this.plugin.settings.edParaGap))
+          .onChange(async (value) => {
+            const v = String(value || '').trim();
+            if (!v) {
+              this.plugin.settings.edParaGap = '';
+            } else {
+              const n = parseFloat(v);
+              this.plugin.settings.edParaGap = Number.isFinite(n) && n >= 0 ? n : '';
+            }
+            await this.plugin.saveSettings();
+            this.plugin.refreshReaders();
+            try { this.app.workspace.updateOptions(); } catch (e) { /* 무시 */ }
+          })
+      );
+
+    subhead('오타 자동고침 (자동 대치)', secEdit);
+    secEdit.createEl('p', {
+      text: '자주 틀리는 오타(예: 하난미 → 하나님, 예수님게서 → 예수님께서)를 미리 등록해 두면, 글을 쓰다가 스페이스바·엔터·문장부호를 누르는 순간 바른 글자로 자연스럽게 고쳐집니다. 고쳐진 직후 Ctrl+Z(맥/아이패드는 Cmd+Z)를 누르면 방금 고쳐진 글자만 원래 입력한 오타로 즉시 복원됩니다.',
+    }).style.cssText = 'color: var(--text-muted); font-size: 12px; margin-bottom: 8px;';
+
+    new Setting(secEdit)
+      .setName('오타 자동고침 사용')
+      .setDesc('편집 화면 및 마인드맵 노드 입력 중 등록된 오타를 자동으로 고칩니다.')
+      .addToggle((tg) =>
+        tg.setValue(this.plugin.settings.edAutocorrectEnabled !== false).onChange(async (v) => {
+          this.plugin.settings.edAutocorrectEnabled = v;
+          await this.plugin.saveData(this.plugin.settings);
+        })
+      )
+      .addButton((b) =>
+        b
+          .setButtonText(`단어장 열기 / 등록 (${Object.keys(this.plugin.settings.edAutocorrectRules || {}).length}개)`)
+          .setCta()
+          .onClick(() => {
+            const modal = new SmmAutocorrectModal(this.app, this.plugin, '');
+            const origClose = modal.onClose.bind(modal);
+            modal.onClose = () => {
+              origClose();
+              this.display();
+            };
+            modal.open();
+          })
+      );
+
+    new Setting(secEdit)
+      .setName('조사·어미 결합 시에도 자동고침')
+      .setDesc('켜면 "하난미 → 하나님" 하나만 등록해 두어도 "하난미께서", "하난미의", "하난미은" 등을 입력할 때 앞부분을 인식해 "하나님께서", "하나님의", "하나님은"으로 함께 고쳐줍니다.')
+      .addToggle((tg) =>
+        tg.setValue(this.plugin.settings.edAutocorrectPrefixMatch !== false).onChange(async (v) => {
+          this.plugin.settings.edAutocorrectPrefixMatch = v;
+          await this.plugin.saveData(this.plugin.settings);
+        })
+      );
 
     subhead('한자 변환', secEdit);
     secEdit.createEl('p', {
@@ -4877,6 +7312,56 @@ class SermonMindmapSettingTab extends PluginSettingTab {
     fontRow('성경구절 폰트 (편집 화면)', '성경구절 줄의 글꼴입니다(편집 화면·읽기 보기·마인드맵 공통). 비워두면 Freesentation 7(기존 기본값)을 씁니다.', 'mmFontVerse', '', '비우면 Freesentation 7', secEdit);
     sizeRow('성경구절 크기 (px)', '비워두면 편집 화면의 기본 글자 크기를 그대로 씁니다(마인드맵도 같은 크기).', 'edVerseSize', '기본 크기', secEdit);
 
+    const edColorPicker = (label, desc, key, target, defaultHex) => {
+      const def = defaultHex != null ? String(defaultHex).replace(/^#/, '') : '';
+      new Setting(target || secEdit).setName(label).setDesc(desc)
+        .addColorPicker((picker) =>
+          picker.setValue('#' + smmHexOr(this.plugin.settings[key], def))
+            .onChange(async (value) => {
+              this.plugin.settings[key] = smmHexOr(value, def);
+              await this.plugin.saveSettings();
+              this.plugin.updateMmStyleVars();
+              try { this.plugin.refreshReaders(); } catch (e) { /* 무시 */ }
+            })
+        )
+        .addExtraButton((btn) =>
+          btn.setIcon('rotate-ccw').setTooltip(def ? `기본값(#${def})으로 초기화` : '기본값으로(테마 기본)').onClick(async () => {
+            this.plugin.settings[key] = def;
+            await this.plugin.saveSettings();
+            this.plugin.updateMmStyleVars();
+            try { this.plugin.refreshReaders(); } catch (e) { /* 무시 */ }
+            this.display();
+          })
+        );
+    };
+
+    edColorPicker('성경구절 글자색 (밝은 테마)', '성경구절 줄("(창 1:1) …" 등)의 글자 색상입니다. 비워두면 테마 기본색을 씁니다.', 'edColorVerse', secEdit, '');
+    edColorPicker('성경구절 글자색 (다크 모드)', '다크 모드에서 성경구절 줄의 글자 색상입니다. 비워두면 테마 기본색을 씁니다.', 'edColorDarkVerse', secEdit, '');
+    edColorPicker('인용문(>) 글자색 (밝은 테마)', '\'>\'로 인용한 줄의 글자 색상입니다. 비워두면 테마 기본색을 씁니다.', 'edColorQuote', secEdit, '');
+    edColorPicker('인용문(>) 글자색 (다크 모드)', '다크 모드에서 \'>\' 인용 줄의 글자 색상입니다. 비워두면 테마 기본색을 씁니다.', 'edColorDarkQuote', secEdit, '');
+
+    {
+      const hcEdit = subsection('제목 1~6단계 크기 및 글자색 (편집 화면)', secEdit);
+      hcEdit.createEl('p', {
+        text: '편집 화면·읽기 보기·마인드맵의 제목 1~6단계(# ~ ######) 글자 크기(px) 및 색상입니다. 색상의 기본값은 heading-colors 스니펫 및 마인드맵과 동일하게 세팅되어 있습니다.',
+      }).style.cssText = 'color: var(--text-muted); font-size: 12px; margin: 0 0 6px 0;';
+
+      subhead('제목 1~6단계 글자 크기 (px)', hcEdit);
+      for (let i = 1; i <= 6; i++) {
+        sizeRow('제목 ' + i + ' 크기 (px)', '비워두면 테마의 제목 ' + i + ' 기본 크기를 그대로 씁니다.', 'edSizeH' + i, '테마 기본', hcEdit);
+      }
+
+      subhead('밝은 테마 (제목 1~6단계)', hcEdit);
+      for (let i = 1; i <= 6; i++) {
+        edColorPicker('제목 ' + i + ' 색 (밝은 테마)', '', 'edColorH' + i, hcEdit, M_COLOR_H_LIGHT[i - 1]);
+      }
+
+      subhead('다크 모드 (제목 1~6단계)', hcEdit);
+      for (let i = 1; i <= 6; i++) {
+        edColorPicker('제목 ' + i + ' 색 (다크 모드)', '', 'edColorDarkH' + i, hcEdit, M_COLOR_H_DARK[i - 1]);
+      }
+    }
+
     subhead('깊이 표시 (✓/-)', secEdit);
     new Setting(secEdit)
       .setName('몸말 줄에 깊이 표시 (편집 화면)')
@@ -4891,12 +7376,162 @@ class SermonMindmapSettingTab extends PluginSettingTab {
 
     sizeRow('깊이 표시 글자 크기 (편집 화면, px)', '✓/- 표시 글자의 크기입니다. 비워두면 기본 크기(0.85em 상당)를 그대로 씁니다.', 'edMarkSize', '기본 크기', secEdit);
 
+    const strongPresets = [
+      { id: '✓', name: '✓ (체크표 - 기본값)' },
+      { id: '●', name: '● (채운 원)' },
+      { id: '◆', name: '◆ (채운 다이아몬드)' },
+      { id: '■', name: '■ (채운 사각형)' },
+      { id: '▶', name: '▶ (오른쪽 삼각형)' },
+      { id: '★', name: '★ (별표)' },
+      { id: '※', name: '※ (참고표/당구장표)' },
+      { id: '◎', name: '◎ (이중 원)' },
+      { id: 'custom', name: '✏️ 직접 입력' },
+    ];
+    const strongPresetIds = new Set(['✓', '●', '◆', '■', '▶', '★', '※', '◎']);
+    let strongTextComp = null;
+    let strongDropdownComp = null;
+
+    const updateStrongMark = async (val) => {
+      const v = (val || '').trim() || '✓';
+      this.plugin.settings.markStrongIcon = v;
+      await this.plugin.saveSettings();
+      this.plugin.refreshAllMarkViews();
+    };
+
+    new Setting(secEdit)
+      .setName('대지 (1단계) 기호 모양')
+      .setDesc('들여쓰기 없는 본문 대지 줄 맨 앞에 붙는 기호입니다. (목록에서 기호를 고르거나 오른쪽 칸에 직접 입력하세요)')
+      .addDropdown((drop) => {
+        strongDropdownComp = drop;
+        strongPresets.forEach((p) => drop.addOption(p.id, p.name));
+        const cur = this.plugin.settings.markStrongIcon || '✓';
+        drop.setValue(strongPresetIds.has(cur) ? cur : 'custom');
+        drop.onChange(async (val) => {
+          if (val !== 'custom') {
+            if (strongTextComp) strongTextComp.setValue(val);
+            await updateStrongMark(val);
+          }
+        });
+      })
+      .addText((text) => {
+        strongTextComp = text;
+        try { text.inputEl.style.width = '60px'; text.inputEl.style.textAlign = 'center'; } catch (e) { }
+        text
+          .setPlaceholder('✓')
+          .setValue(this.plugin.settings.markStrongIcon || '✓')
+          .onChange(async (val) => {
+            const v = val.trim() || '✓';
+            if (strongDropdownComp) {
+              strongDropdownComp.setValue(strongPresetIds.has(v) ? v : 'custom');
+            }
+            await updateStrongMark(v);
+          });
+      });
+
+    const midPresets = [
+      { id: 'ㆍ', name: 'ㆍ (가운데 점 - 기본값)' },
+      { id: '○', name: '○ (빈 원)' },
+      { id: '◇', name: '◇ (빈 다이아몬드)' },
+      { id: '□', name: '□ (빈 사각형)' },
+      { id: '-', name: '- (대시/하이픈)' },
+      { id: '▷', name: '▷ (빈 삼각형)' },
+      { id: 'custom', name: '✏️ 직접 입력' },
+    ];
+    const midPresetIds = new Set(['ㆍ', '○', '◇', '□', '-', '▷']);
+    let midTextComp = null;
+    let midDropdownComp = null;
+
+    const updateMidMark = async (val) => {
+      const v = (val || '').trim() || 'ㆍ';
+      this.plugin.settings.markMidIcon = v;
+      await this.plugin.saveSettings();
+      this.plugin.refreshAllMarkViews();
+    };
+
+    new Setting(secEdit)
+      .setName('소지 (2단계) 기호 모양')
+      .setDesc('1단계 들여쓴 소지 줄 맨 앞에 붙는 기호입니다. (기본값: ㆍ)')
+      .addDropdown((drop) => {
+        midDropdownComp = drop;
+        midPresets.forEach((p) => drop.addOption(p.id, p.name));
+        const cur = this.plugin.settings.markMidIcon || 'ㆍ';
+        drop.setValue(midPresetIds.has(cur) ? cur : 'custom');
+        drop.onChange(async (val) => {
+          if (val !== 'custom') {
+            if (midTextComp) midTextComp.setValue(val);
+            await updateMidMark(val);
+          }
+        });
+      })
+      .addText((text) => {
+        midTextComp = text;
+        try { text.inputEl.style.width = '60px'; text.inputEl.style.textAlign = 'center'; } catch (e) { }
+        text
+          .setPlaceholder('ㆍ')
+          .setValue(this.plugin.settings.markMidIcon || 'ㆍ')
+          .onChange(async (val) => {
+            const v = val.trim() || 'ㆍ';
+            if (midDropdownComp) {
+              midDropdownComp.setValue(midPresetIds.has(v) ? v : 'custom');
+            }
+            await updateMidMark(v);
+          });
+      });
+
+    const subPresets = [
+      { id: '-', name: '- (대시 - 기본값)' },
+      { id: '·', name: '· (작은 점)' },
+      { id: '▪', name: '▪ (작은 네모)' },
+      { id: 'custom', name: '✏️ 직접 입력' },
+    ];
+    const subPresetIds = new Set(['-', '·', '▪']);
+    let subTextComp = null;
+    let subDropdownComp = null;
+
+    const updateSubMark = async (val) => {
+      const v = (val || '').trim() || '-';
+      this.plugin.settings.markSubIcon = v;
+      await this.plugin.saveSettings();
+      this.plugin.refreshAllMarkViews();
+    };
+
+    new Setting(secEdit)
+      .setName('세부 (3단계) 기호 모양')
+      .setDesc('2단계 들여쓴 세부 줄 맨 앞에 붙는 기호입니다. (기본값: -)')
+      .addDropdown((drop) => {
+        subDropdownComp = drop;
+        subPresets.forEach((p) => drop.addOption(p.id, p.name));
+        const cur = this.plugin.settings.markSubIcon || '-';
+        drop.setValue(subPresetIds.has(cur) ? cur : 'custom');
+        drop.onChange(async (val) => {
+          if (val !== 'custom') {
+            if (subTextComp) subTextComp.setValue(val);
+            await updateSubMark(val);
+          }
+        });
+      })
+      .addText((text) => {
+        subTextComp = text;
+        try { text.inputEl.style.width = '60px'; text.inputEl.style.textAlign = 'center'; } catch (e) { }
+        text
+          .setPlaceholder('-')
+          .setValue(this.plugin.settings.markSubIcon || '-')
+          .onChange(async (val) => {
+            const v = val.trim() || '-';
+            if (subDropdownComp) {
+              subDropdownComp.setValue(subPresetIds.has(v) ? v : 'custom');
+            }
+            await updateSubMark(v);
+          });
+      });
+
     secEdit.createEl('p', {
-      text: '들여쓰기 없는(0단계) 줄 — 맨 앞에 ✓가 붙는 줄 — 의 모양입니다. 편집 화면·옵시디언 읽기 보기·마인드맵에 똑같이 적용됩니다. 강대상(설교문 읽기 모드)은 아래 "설교문 읽기 모드 (강대상)"에서 따로 맞춥니다.',
+      text: '들여쓰기 없는(0단계) 줄 — 맨 앞에 대지 기호(✓ 등)가 붙는 줄 — 의 모양입니다. 편집 화면·옵시디언 읽기 보기·마인드맵에 똑같이 적용됩니다. 강대상(설교문 읽기 모드)은 아래 "설교문 읽기 모드 (강대상)"에서 따로 맞춥니다.',
     }).style.cssText = 'color: var(--text-muted); font-size: 12px; margin: 6px 0 8px 0;';
     subhead('✓ 줄 글자 (✓ 옆 문장)', secEdit);
     fontRow('✓ 줄 글자 폰트', '✓ 옆에 오는 문장 전체의 폰트입니다. 비워두면 주변 글꼴 그대로입니다. 아이패드 등 다른 기기에서도 똑같이 보이게 하려면 그 폰트 파일(ttf/otf)을 "설교문 읽기 모드 (강대상) → 번들 글꼴" 폴더에 넣어 두세요 — 파일 이름이 "Freesentation-9Black"처럼 띄어쓰기/하이픈만 달라도 같은 폰트로 알아서 찾아 씁니다.', 'markLineFont', '', '비우면 주변 글꼴 그대로', secEdit);
     sizeRow('✓ 줄 글자 크기 (px)', '✓ 옆에 오는 문장 전체의 글자 크기입니다. 비워두면 주변과 같은 크기 그대로입니다.', 'markLineSize', '기본 크기', secEdit);
+    edColorPicker('✓ 줄 글자색 (밝은 테마)', '밝은 테마에서 ✓ 줄 문장 전체의 색입니다. 비워두면 본문 기본색을 씁니다.', 'markStrongLightTextColor', secEdit, '');
     colorRow('✓ 줄 글자색 (다크 모드)', '다크 모드에서 ✓ 줄 문장 전체의 색입니다. 밝은 테마에서는 적용되지 않습니다.', 'markStrongTextColor', 'E8D9A0', secEdit);
     subhead('✓ 기호 자체', secEdit);
     colorRow('✓ 기호 색상', '줄 맨 앞 ✓ 기호의 색입니다.', 'markStrongColor', 'BF4E14', secEdit);
@@ -5076,6 +7711,15 @@ class SermonMindmapSettingTab extends PluginSettingTab {
     const headSizeTexts = [];
 
     subhead('제목', secRead);
+    new Setting(secRead)
+      .setName('제목 색상을 편집 화면과 일치')
+      .setDesc('켜면 강대상 모드에서 아래 제목 색상 대신 "설교문(편집) 화면"에서 설정한 테마별(밝은/어두운) 제목 색상을 그대로 씁니다.')
+      .addToggle((tg) =>
+        tg.setValue(!!this.plugin.settings.rdSyncHeadColor).onChange(async (v) => {
+          this.plugin.settings.rdSyncHeadColor = v;
+          await rdChanged();
+        })
+      );
     rdFont('제목 글꼴', '제목(#)에 쓸 글꼴입니다. 강대상뿐 아니라 편집 화면·일반 읽기 모드·마인드맵의 제목에도 똑같이 적용됩니다. 비우면 본문 글꼴과 같게(강대상) / 테마 기본 제목 글꼴 그대로(다른 화면들)로 씁니다. 아이패드 등 다른 기기에서도 똑같이 보이게 하려면 그 폰트 파일(ttf/otf)을 아래 "번들 글꼴" 폴더에 넣어 두세요.', 'rdFontHead', '비우면 본문 글꼴');
     {
       const hs = subsection('제목 1~6단계 크기·색', secRead);
@@ -5114,6 +7758,15 @@ class SermonMindmapSettingTab extends PluginSettingTab {
     }
 
     subhead('성경구절', secRead);
+    new Setting(secRead)
+      .setName('성경구절/인용 색상을 편집 화면과 일치')
+      .setDesc('켜면 강대상 모드의 성경구절/인용 글자 색상을 "설교문(편집) 화면"의 성경구절 색상과 동일하게 맞춥니다.')
+      .addToggle((tg) =>
+        tg.setValue(!!this.plugin.settings.rdSyncVerseColor).onChange(async (v) => {
+          this.plugin.settings.rdSyncVerseColor = v;
+          await rdChanged();
+        })
+      );
     rdFont('인용글(성경구절) 글꼴', '`>` 인용문과 "책 장:절"로 시작하는 줄에 쓸 글꼴입니다. 비우면 아래 설정을 따릅니다.', 'rdFontVerse', '비우면 아래 설정을 따름');
 
     new Setting(secRead)
@@ -5200,11 +7853,45 @@ class SermonMindmapSettingTab extends PluginSettingTab {
           })
         );
 
+      new Setting(fixedBody)
+        .setName('아이패드 프로 13인치 (M4/M5) 세로로 맞추기')
+        .setDesc('세로 1032px × 가로 1240px (아이패드 프로 13인치, 세로로 들고 볼 때 기준 — 옵시디언 상단 탭 막대 높이를 이미 뺀 값)로 한 번에 채워 넣고 켭니다.')
+        .addButton((btn) =>
+          btn.setButtonText('적용').onClick(async () => {
+            this.plugin.settings.rdFixedW = 1032;
+            this.plugin.settings.rdFixedH = 1240;
+            this.plugin.settings.rdFixedSize = true;
+            await rdChanged();
+            this.display();
+          })
+        );
+
+      new Setting(fixedBody)
+        .setName('아이패드 프로 13인치 (M4/M5) 가로로 맞추기')
+        .setDesc('가로 1376px × 세로 896px (아이패드 프로 13인치, 눕혀서 볼 때 기준 — 옵시디언 상단 탭 막대 높이를 이미 뺀 값)로 한 번에 채워 넣고 켭니다.')
+        .addButton((btn) =>
+          btn.setButtonText('적용').onClick(async () => {
+            this.plugin.settings.rdFixedW = 1376;
+            this.plugin.settings.rdFixedH = 896;
+            this.plugin.settings.rdFixedSize = true;
+            await rdChanged();
+            this.display();
+          })
+        );
+
       rdNum('가로 (px)', '기기 화면의 가로 크기(포인트 단위)입니다.', 'rdFixedW', '834', fixedBody);
       rdNum('세로 (px)', '기기 화면의 세로 크기(포인트 단위)입니다. 옵시디언 앱 자체의 상단 탭 막대 높이는 이미 빠진 값을 넣는 게 좋습니다.', 'rdFixedH', '1086', fixedBody);
     }
 
     subhead('동작', secRead);
+    new Setting(secRead)
+      .setName('위아래 스크롤 모드 (장 나누지 않고 쭉 보기)')
+      .setDesc('켜면 옆으로 장을 넘기는 대신, 일반 읽기 모드처럼 처음부터 끝까지 한 화면에 이어서 위아래 스크롤로 읽습니다.')
+      .addToggle((tg) =>
+        tg.setValue(!!this.plugin.settings.rdScroll).onChange(async (v) => {
+          this.plugin.settings.rdScroll = v; await rdChanged();
+        })
+      );
     new Setting(secRead)
       .setName('넘길 때 밀리는 움직임')
       .setDesc('끄면 장이 즉시 바뀝니다.')
@@ -5306,6 +7993,143 @@ class SermonMindmapSettingTab extends PluginSettingTab {
             this.display();
           })
       );
+
+    // 성경 · 스트롱코드 · 글꼴 데이터 자동 설치 구역
+    const secData = section('📦 성경 · 원어(스트롱) · 글꼴 데이터 자동 설치', false);
+    const dataDescEl = secData.createDiv();
+    dataDescEl.style.cssText = 'font-size: 13px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;';
+    dataDescEl.setText('GitHub 릴리즈에서 성경 본문(_bibles), 스트롱코드 원어사전(_strong, _strong_json), 추천 글꼴(_설교마인드맵_글꼴)을 자동으로 다운로드하여 현재 보관함(Vault)에 설치합니다. (Windows, macOS, iPadOS 모두 지원)');
+
+    const statusEl = secData.createDiv();
+    statusEl.style.cssText = 'padding: 8px 12px; margin-bottom: 12px; border-radius: 6px; background: var(--background-secondary); font-size: 12px; line-height: 1.6;';
+    const refreshStatus = async () => {
+      try {
+        const ad = this.app.vault.adapter;
+        const bibles = await ad.exists('_bibles');
+        const strong = await ad.exists('_strong');
+        const strongJson = await ad.exists('_strong_json');
+        const fontF = String(this.plugin.settings.rdFontFolder || '').trim() || DEFAULT_SETTINGS.rdFontFolder;
+        const fonts = await ad.exists(fontF);
+        statusEl.innerHTML = `<b>현재 보관함 설치 상태:</b><br>` +
+          `• 성경 DB (_bibles): ${bibles ? '<span style="color:var(--text-success)">설치됨 ✓</span>' : '<span style="color:var(--text-error)">미설치 ✗</span>'}<br>` +
+          `• 스트롱 원어 DB (_strong): ${strong ? '<span style="color:var(--text-success)">설치됨 ✓</span>' : '<span style="color:var(--text-error)">미설치 ✗</span>'}<br>` +
+          `• 모바일용 스트롱 JSON (_strong_json): ${strongJson ? '<span style="color:var(--text-success)">설치됨 ✓</span>' : '<span style="color:var(--text-error)">미설치 ✗</span>'}<br>` +
+          `• 추천 글꼴 (${fontF}): ${fonts ? '<span style="color:var(--text-success)">설치됨 ✓</span>' : '<span style="color:var(--text-error)">미설치 ✗</span>'}`;
+      } catch (e) {
+        statusEl.setText('설치 상태를 확인하지 못했습니다.');
+      }
+    };
+    refreshStatus();
+
+    new Setting(secData)
+      .setName('데이터 원클릭 다운로드 & 설치')
+      .setDesc('ZIP 압축 파일(약 169MB)을 다운로드하고 보관함에 바로 압축을 풉니다.')
+      .addButton((btn) => {
+        btn
+          .setButtonText('지금 다운로드 & 설치')
+          .setCta()
+          .onClick(async () => {
+            btn.setDisabled(true);
+            btn.setButtonText('설치 진행 중...');
+            try {
+              await smmDownloadAndInstallData(this.plugin);
+              await refreshStatus();
+            } finally {
+              btn.setDisabled(false);
+              btn.setButtonText('지금 다운로드 & 설치');
+            }
+          });
+      });
+
+    new Setting(secData)
+      .setName('다운로드 URL (고급)')
+      .setDesc('기본 GitHub 릴리즈 외에 별도의 ZIP URL에서 다운로드할 때만 입력합니다.')
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.bibleDataDownloadUrl)
+          .setValue(this.plugin.settings.bibleDataDownloadUrl || '')
+          .onChange(async (val) => {
+            this.plugin.settings.bibleDataDownloadUrl = val.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // AI 이미지 텍스트 변환 (OCR / Gemini) 구역
+    const secOcr = section('🔍 AI 이미지 텍스트 변환 (OCR / Gemini)', false);
+    const ocrDescEl = secOcr.createDiv();
+    ocrDescEl.style.cssText = 'font-size: 13px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;';
+    ocrDescEl.innerHTML = '스캔된 책이나 교재, 성경 주석 등의 이미지를 최신 Google Gemini AI를 통해 <b>99% 이상의 높은 정확도</b>의 마크다운 텍스트로 즉시 변환합니다.<br>' +
+      'Google AI Studio에서 <b>무료 API 키</b>를 발급받아 입력하시면 하루 수백 장을 완전 무료로 사용하실 수 있습니다. ' +
+      '<a href="https://aistudio.google.com/" target="_blank" style="text-decoration: underline; color: var(--text-accent);">[무료 API 키 발급받기 (aistudio.google.com)]</a>';
+
+    let apiKeyInputEl = null;
+    new Setting(secOcr)
+      .setName('Google Gemini API Key')
+      .setDesc('발급받은 Gemini API 키(AIzaSy...)를 입력합니다.')
+      .addText((text) => {
+        apiKeyInputEl = text.inputEl;
+        text.inputEl.type = 'password';
+        text
+          .setPlaceholder('AIzaSy...')
+          .setValue(this.plugin.settings.geminiApiKey || '')
+          .onChange(async (val) => {
+            this.plugin.settings.geminiApiKey = val.trim();
+            await this.plugin.saveSettings();
+          });
+      })
+      .addExtraButton((btn) => {
+        btn
+          .setIcon('eye')
+          .setTooltip('API 키 보이기 / 숨기기')
+          .onClick(() => {
+            if (apiKeyInputEl) {
+              apiKeyInputEl.type = apiKeyInputEl.type === 'password' ? 'text' : 'password';
+            }
+          });
+      });
+
+    new Setting(secOcr)
+      .setName('API 연결 테스트')
+      .setDesc('입력한 API 키가 정상적으로 동작하는지 확인합니다.')
+      .addButton((btn) => {
+        btn
+          .setButtonText('연결 테스트')
+          .onClick(async () => {
+            const key = (this.plugin.settings.geminiApiKey || '').trim();
+            if (!key) {
+              new Notice('API 키를 먼저 입력해 주세요.');
+              return;
+            }
+            btn.setDisabled(true);
+            btn.setButtonText('확인 중...');
+            try {
+              const res = await smmTestGeminiApi(key);
+              if (res.ok) {
+                new Notice('✅ Gemini API 연결 성공! 정상적으로 이미지 텍스트 변환을 사용할 수 있습니다.');
+              } else {
+                new Notice('❌ 연결 실패: ' + (res.error || 'API 키를 다시 확인해 주세요.'));
+              }
+            } catch (err) {
+              new Notice('❌ 연결 오류: ' + (err && err.message ? err.message : err));
+            } finally {
+              btn.setDisabled(false);
+              btn.setButtonText('연결 테스트');
+            }
+          });
+      });
+
+    new Setting(secOcr)
+      .setName('OCR 맞춤 지침 (프롬프트 / 선택사항)')
+      .setDesc('비워두면 설교/성경 본문 및 단락 구조를 최적화하여 마크다운으로 추출하는 기본 지침이 적용됩니다.')
+      .addTextArea((ta) =>
+        ta
+          .setPlaceholder(SMM_DEFAULT_OCR_PROMPT)
+          .setValue(this.plugin.settings.ocrPrompt || '')
+          .onChange(async (val) => {
+            this.plugin.settings.ocrPrompt = val.trim();
+            await this.plugin.saveSettings();
+          })
+      );
   }
 }
 
@@ -5327,6 +8151,18 @@ class SermonMindmapSettingTab extends PluginSettingTab {
  * 않으면 목록 안에 쓴 성경구절이 전부 걸러지지 않는다(실제로 그래서 적용이 안 됐음).
  * 라이브 프리뷰에서 기호가 '•' 로 바뀌어 보이는 경우까지 함께 처리한다.
  */
+function smmIsQuoteEditorLine(text) {
+  let s = String(text == null ? '' : text).trim();
+  if (s === '') return false;
+  if (s.startsWith('>')) return true;
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/^(?:[-*+•‣◦·✓ㆍ]|\d{1,3}[.)])\s*/, '').trim();
+  } while (s !== prev && s !== '');
+  return s.startsWith('>');
+}
+
 function smmIsVerseEditorLine(text) {
   let s = String(text == null ? '' : text).trim();
   if (s === '') return false;
@@ -5334,8 +8170,9 @@ function smmIsVerseEditorLine(text) {
   let prev;
   do {
     prev = s;
-    s = s.replace(/^(?:[-*+•‣◦·]|\d{1,3}[.)])\s*/, '').trim();
+    s = s.replace(/^(?:[-*+•‣◦·✓ㆍ]|\d{1,3}[.)])\s*/, '').trim();
   } while (s !== prev && s !== '');
+  if (s.startsWith('>')) return true;
   return s !== '' && isVerseLine(s);
 }
 
@@ -5353,17 +8190,25 @@ function smmBuildEditorVerseExtension(plugin) {
   if (!ViewPlugin || !Decoration || !RangeSetBuilder) return null;
 
   const verseMark = Decoration.line({ class: 'smm-ed-verse' });
+  const quoteMark = Decoration.line({ class: 'smm-ed-quote' });
+  const verseQuoteMark = Decoration.line({ class: 'smm-ed-verse smm-ed-quote' });
 
   const build = (view) => {
     const builder = new RangeSetBuilder();
     try {
-      if (!plugin.settings || !plugin.settings.edVerseFont) return builder.finish();
+      const verseFontOn = !!(plugin.settings && plugin.settings.edVerseFont);
       for (const { from, to } of view.visibleRanges) {
         let pos = from;
         while (pos <= to) {
           const line = view.state.doc.lineAt(pos);
-          if (smmIsVerseEditorLine(line.text)) {
+          const isQuote = smmIsQuoteEditorLine(line.text);
+          const isVerse = verseFontOn && smmIsVerseEditorLine(line.text);
+          if (isVerse && isQuote) {
+            builder.add(line.from, line.from, verseQuoteMark);
+          } else if (isVerse) {
             builder.add(line.from, line.from, verseMark);
+          } else if (isQuote) {
+            builder.add(line.from, line.from, quoteMark);
           }
           if (line.to + 1 <= pos) break; // 안전장치 (빈 문서 등)
           pos = line.to + 1;
@@ -5468,12 +8313,23 @@ function smmBuildVerseRefBadgeExtension(plugin) {
  * smmBuildEditorVMarkExtension(✓/- 위젯)과 smmBuildEditorStrongLineExtension
  * (✓ 줄 전체 강조, 아래) 둘 다 쓰는 공통 계산이라 모듈 최상위로 뺐다.
  */
-function smmClassifyLineMarks(doc) {
+function smmHasVMarkDisabledFrontmatter(text) {
+  const s = String(text || '');
+  const fm = s.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!fm) return false;
+  return /^(?:vmark|show_vmark)\s*:\s*(?:false|off|no|0)\b/im.test(fm[1]) ||
+    /^(?:서식|doc_profile)\s*:\s*["']?(?:일반\s*문서|general)["']?/im.test(fm[1]);
+}
+
+function smmClassifyLineMarks(doc, plugin) {
   const marks = new Map(); // 줄 번호(1-based) -> 표시 글자
+  if (smmHasVMarkDisabledFrontmatter(doc.toString())) return marks;
   // 목록(list) 줄이 "강등"되어 표시를 받을 때 쓸 구조적 깊이를 마인드맵·워드
   // 내보내기·설교문 미리보기와 똑같은 기준(smmComputeListLineInfo →
   // smmNodeDepth)으로 미리 계산해 둔다.
   const listLineInfo = smmComputeListLineInfo(doc.toString());
+  const cfg = plugin ? plugin.settings : null;
+  const lineMarks = smmGetLineMarks(cfg);
   let fence = null;
   let prevKind = null; // 'plain' | 'list' | 'headquote' | null(문단 경계)
   for (let i = 1; i <= doc.lines; i++) {
@@ -5487,7 +8343,7 @@ function smmClassifyLineMarks(doc) {
     }
     if (fence) continue;
     if (text.trim() === '') { prevKind = null; continue; }
-    const isHeadQuoteTable = /^\s{0,3}(#{1,6}\s|>|\|)/.test(text) || (i === 1 && text.trim() === '---');
+    const isHeadQuoteTable = /^\s{0,3}(#{1,6}\s|>|\|)/.test(text) || /^[ \t]*>/.test(text) || (i === 1 && text.trim() === '---');
     if (isHeadQuoteTable) { prevKind = 'headquote'; continue; }
     const listM = text.match(/^([ \t]*)([-*+]|\d+[.)])[ \t]+(.*)$/);
     if (listM) {
@@ -5511,21 +8367,41 @@ function smmClassifyLineMarks(doc) {
         const info = listLineInfo.get(i - 1); // parseDoc은 0-based 줄 번호
         const mark = info && info.numberedBullet
           ? info.numberedBullet
-          : SMR_LINE_MARKS[Math.min(info ? info.depth : 0, SMR_LINE_MARKS.length - 1)];
+          : lineMarks[Math.min(info ? info.depth : 0, lineMarks.length - 1)];
         marks.set(i, mark);
       }
       prevKind = 'plain';
       continue;
     }
     const ws = text.match(/^[ \t]*/)[0];
-    const depth = Math.floor(indentWidth(ws) / 4);
+    const infoPlain = listLineInfo.get(i - 1);
+    const depth = Math.max(infoPlain ? infoPlain.depth : 0, Math.floor(indentWidth(ws) / 4));
     const rawBody = text.slice(ws.length);
-    const skip = depth === 0 && smmIsVerseEditorLine(rawBody);
-    if (!skip) marks.set(i, SMR_LINE_MARKS[Math.min(depth, SMR_LINE_MARKS.length - 1)]);
+    const explicit = smmParseExplicitMarkLine(rawBody);
+    const outlineM = (!explicit && depth === 0) ? smmParseOutlinePrefix(rawBody) : null;
+    const bodyForCheck = explicit ? explicit.body : (outlineM ? outlineM.body : rawBody);
+    const skip = depth === 0 && smmIsVerseEditorLine(bodyForCheck);
+    if (!skip) {
+      if (explicit) {
+        const isSub = SMM_SUB_MARKS_SET.has(explicit.mark);
+        marks.set(i, { mark: explicit.mark, explicit: true, rawLen: explicit.rawLen, depth: isSub ? Math.max(1, depth) : depth, isSub: isSub });
+      } else if (outlineM) {
+        marks.set(i, { mark: outlineM.mark, explicit: true, outline: true, rawLen: outlineM.rawLen, depth: 0 });
+      } else {
+        const checkM = rawBody.match(/^([✓✔])([ \\t]*)/);
+        if (checkM) {
+          marks.set(i, { mark: checkM[1], explicit: true, rawLen: checkM[0].length, depth: depth });
+        } else {
+          marks.set(i, { mark: lineMarks[Math.min(depth, lineMarks.length - 1)], depth: depth });
+        }
+      }
+    }
     prevKind = 'plain';
   }
   return marks;
 }
+
+let _smmEditorMarkExtGen = 0;
 
 function smmBuildEditorVMarkExtension(plugin) {
   let cmView;
@@ -5542,24 +8418,49 @@ function smmBuildEditorVMarkExtension(plugin) {
   if (!ViewPlugin || !Decoration || !WidgetType || !RangeSetBuilder) return null;
 
   class MarkWidget extends WidgetType {
-    constructor(ch) {
+    constructor(ch, plg) {
       super();
       this.ch = ch;
+      this.plg = plg;
     }
     toDOM() {
       const span = document.createElement('span');
-      span.className = 'smm-ed-vmark' + (this.ch === SMR_LINE_MARKS[0] ? ' smm-ed-vmark-strong' : '');
-      span.textContent = this.ch;
+      const markChar = typeof this.ch === 'object' ? this.ch.mark : this.ch;
+      const depth = typeof this.ch === 'object' && this.ch.depth != null ? this.ch.depth : 0;
+      const isSub = SMM_SUB_MARKS_SET.has(markChar) || (typeof this.ch === 'object' && this.ch.isSub) || depth > 0;
+      const isStrong = !isSub && (depth === 0) && smmIsStrongMark(this.ch, this.plg ? this.plg.settings : null);
+      const wideCls = (isStrong && smmIsWideMark(markChar)) ? ' smm-mark-wide' : '';
+      span.className = 'smm-ed-vmark' + (isStrong ? (' smm-ed-vmark-strong' + wideCls) : (isSub ? ' smm-ed-vmark-sub' : ''));
+      span.textContent = markChar;
       span.setAttribute('aria-hidden', 'true');
       return span;
     }
     eq(other) { return other instanceof MarkWidget && other.ch === this.ch; }
     ignoreEvent() { return true; }
   }
+  let lastBuildGen = -1;
   const widgetCache = new Map();
+  const replaceCache = new Map();
   const widgetFor = (ch) => {
-    let w = widgetCache.get(ch);
-    if (!w) { w = Decoration.widget({ widget: new MarkWidget(ch), side: -1 }); widgetCache.set(ch, w); }
+    if (lastBuildGen !== _smmEditorMarkExtGen) {
+      widgetCache.clear();
+      replaceCache.clear();
+      lastBuildGen = _smmEditorMarkExtGen;
+    }
+    const key = typeof ch === 'object' ? `${ch.mark}_${ch.depth || 0}_${!!ch.isSub}` : String(ch);
+    let w = widgetCache.get(key);
+    if (!w) { w = Decoration.widget({ widget: new MarkWidget(ch, plugin), side: -1 }); widgetCache.set(key, w); }
+    return w;
+  };
+  const replaceWidgetFor = (ch) => {
+    if (lastBuildGen !== _smmEditorMarkExtGen) {
+      widgetCache.clear();
+      replaceCache.clear();
+      lastBuildGen = _smmEditorMarkExtGen;
+    }
+    const key = typeof ch === 'object' ? `${ch.mark}_${ch.depth || 0}_${!!ch.isSub}` : String(ch);
+    let w = replaceCache.get(key);
+    if (!w) { w = Decoration.replace({ widget: new MarkWidget(ch, plugin) }); replaceCache.set(key, w); }
     return w;
   };
 
@@ -5568,13 +8469,30 @@ function smmBuildEditorVMarkExtension(plugin) {
     try {
       if (!plugin.settings || plugin.settings.edShowVMark === false) return builder.finish();
       const doc = view.state.doc;
-      const marks = smmClassifyLineMarks(doc); // 보이지 않는 범위도 포함해 문서 전체 기준으로 한 번만 계산
+      const marks = smmClassifyLineMarks(doc, plugin); // 보이지 않는 범위도 포함해 문서 전체 기준으로 한 번만 계산
+      const seenLines = new Set();
       for (const { from, to } of view.visibleRanges) {
         let pos = from;
         while (pos <= to) {
           const line = doc.lineAt(pos);
-          const ch = marks.get(line.number);
-          if (ch) builder.add(line.from, line.from, widgetFor(ch));
+          if (!seenLines.has(line.number)) {
+            seenLines.add(line.number);
+            const markInfo = marks.get(line.number);
+            if (markInfo) {
+              const wsLen = (line.text.match(/^[ \t]*/) || [''])[0].length;
+              const hasIndent = wsLen > 0;
+              const at = line.from + wsLen;
+              const markObj = typeof markInfo === 'object' ? Object.assign({}, markInfo) : { mark: markInfo };
+              if (hasIndent && (!markObj.depth || markObj.depth === 0)) markObj.depth = 1;
+              if (markObj.depth > 0) markObj.isSub = true;
+              if (markObj.explicit) {
+                const toPos = Math.min(line.to, at + markObj.rawLen);
+                builder.add(at, toPos, replaceWidgetFor(markObj));
+              } else {
+                builder.add(at, at, widgetFor(markObj));
+              }
+            }
+          }
           if (line.to + 1 <= pos) break; // 안전장치 (빈 문서 등)
           pos = line.to + 1;
         }
@@ -5585,9 +8503,15 @@ function smmBuildEditorVMarkExtension(plugin) {
 
   return ViewPlugin.fromClass(
     class {
-      constructor(view) { this.decorations = build(view); }
+      constructor(view) {
+        this.gen = _smmEditorMarkExtGen;
+        this.decorations = build(view);
+      }
       update(u) {
-        if (u.docChanged || u.viewportChanged) this.decorations = build(u.view);
+        if (this.gen !== _smmEditorMarkExtGen || u.docChanged || u.viewportChanged) {
+          this.gen = _smmEditorMarkExtGen;
+          this.decorations = build(u.view);
+        }
       }
     },
     { decorations: (v) => v.decorations }
@@ -5601,13 +8525,6 @@ function smmBuildEditorVMarkExtension(plugin) {
  * 피드백에 따른 것. 위 smmBuildEditorVMarkExtension과 같은 판정(smmClassifyLineMarks)을
  * 쓰지만, 위젯(글자 추가)이 아니라 줄 전체 표시(Decoration.line)라 별도 확장으로 둔다.
  */
-
-
-
-
-
-
-
 function smmBuildEditorStrongLineExtension(plugin) {
   let cmView, cmState;
   try {
@@ -5628,13 +8545,23 @@ function smmBuildEditorStrongLineExtension(plugin) {
     try {
       if (!plugin.settings || plugin.settings.edShowVMark === false) return builder.finish();
       const doc = view.state.doc;
-      const marks = smmClassifyLineMarks(doc);
+      const marks = smmClassifyLineMarks(doc, plugin);
+      const seenLines = new Set();
       for (const { from, to } of view.visibleRanges) {
         let pos = from;
         while (pos <= to) {
           const line = doc.lineAt(pos);
-          if (marks.get(line.number) === SMR_LINE_MARKS[0]) {
-            builder.add(line.from, line.from, strongLine);
+          if (!seenLines.has(line.number)) {
+            seenLines.add(line.number);
+            const markObj = marks.get(line.number);
+            const hasIndent = /^[ \t]+/.test(line.text);
+            const markChar = markObj && typeof markObj === 'object' ? markObj.mark : markObj;
+            const isSubMark = SMM_SUB_MARKS_SET.has(markChar) || (markObj && markObj.isSub);
+            const depth = (markObj && typeof markObj === 'object' && markObj.depth != null) ? markObj.depth : (hasIndent ? 1 : 0);
+            const isDepth0 = !hasIndent && (depth === 0) && !isSubMark;
+            if (isDepth0 && smmIsStrongMark(markObj, plugin ? plugin.settings : null)) {
+              builder.add(line.from, line.from, strongLine);
+            }
           }
           if (line.to + 1 <= pos) break; // 안전장치 (빈 문서 등)
           pos = line.to + 1;
@@ -5646,9 +8573,91 @@ function smmBuildEditorStrongLineExtension(plugin) {
 
   return ViewPlugin.fromClass(
     class {
+      constructor(view) {
+        this.gen = _smmEditorMarkExtGen;
+        this.decorations = build(view);
+      }
+      update(u) {
+        if (this.gen !== _smmEditorMarkExtGen || u.docChanged || u.viewportChanged) {
+          this.gen = _smmEditorMarkExtGen;
+          this.decorations = build(u.view);
+        }
+      }
+    },
+    { decorations: (v) => v.decorations }
+  );
+}
+
+/**
+ * 편집 화면(라이브 프리뷰/소스 모드)에서 줄 끝의 %%shade:<색><단계>%%를 읽어
+ * 해당 줄(.cm-line)에 .smm-line-shade .smm-shade-<색><단계> 배경색을 입히고,
+ * 커서가 그 줄에 없을 때는 %%shade:...%% 주석을 화면에서 숨긴다(Decoration.replace).
+ */
+function smmBuildEditorShadeExtension(plugin) {
+  let cmView, cmState;
+  try {
+    cmView = require('@codemirror/view');
+    cmState = require('@codemirror/state');
+  } catch (e) {
+    return null;
+  }
+  if (!cmView || !cmState) return null;
+  const { ViewPlugin, Decoration } = cmView;
+  const { RangeSetBuilder } = cmState;
+  if (!ViewPlugin || !Decoration || !RangeSetBuilder) return null;
+
+  const shadeLineCache = new Map();
+  const getShadeLineDeco = (cls) => {
+    let d = shadeLineCache.get(cls);
+    if (!d) {
+      d = Decoration.line({ class: 'smm-line-shade ' + cls });
+      shadeLineCache.set(cls, d);
+    }
+    return d;
+  };
+  const hiddenReplaceDeco = Decoration.replace({});
+
+  const build = (view) => {
+    const builder = new RangeSetBuilder();
+    try {
+      const doc = view.state.doc;
+      const sel = view.state.selection.ranges;
+      for (const { from, to } of view.visibleRanges) {
+        let pos = from;
+        while (pos <= to) {
+          const line = doc.lineAt(pos);
+          const text = line.text;
+          const m = text.match(SMM_SHADE_RE);
+          if (m) {
+            const cls = 'smm-shade-' + m[1] + m[2];
+            // 1. 줄 전체 배경 음영
+            builder.add(line.from, line.from, getShadeLineDeco(cls));
+
+            // 2. 커서가 이 줄에 없을 때 %%shade:...%% 주석 숨기기
+            const isCursorOnLine = sel.some((r) => r.from <= line.to && r.to >= line.from);
+            if (!isCursorOnLine) {
+              const tokenStart = line.from + m.index;
+              const tokenEnd = tokenStart + m[0].length;
+              if (tokenStart < tokenEnd) {
+                builder.add(tokenStart, tokenEnd, hiddenReplaceDeco);
+              }
+            }
+          }
+          if (line.to + 1 <= pos) break;
+          pos = line.to + 1;
+        }
+      }
+    } catch (e) { /* 무시 */ }
+    return builder.finish();
+  };
+
+  return ViewPlugin.fromClass(
+    class {
       constructor(view) { this.decorations = build(view); }
       update(u) {
-        if (u.docChanged || u.viewportChanged) this.decorations = build(u.view);
+        if (u.docChanged || u.viewportChanged || u.selectionSet) {
+          this.decorations = build(u.view);
+        }
       }
     },
     { decorations: (v) => v.decorations }
@@ -5765,9 +8774,11 @@ function smmPaintReadingVerses(root, plugin) {
     let n = 0;
     for (let i = 0; i < targets.length; i++) {
       const el = targets[i];
+      const ownText = smmOwnLineText(el);
       // `>` 인용 안의 글은 항상 성경구절로 봄 (마인드맵과 같은 기준)
-      const inQuote = !!(el.closest && el.closest('blockquote'));
-      const want = on && (inQuote || smmIsVerseEditorLine(smmOwnLineText(el)));
+      const inQuote = !!(el.closest && el.closest('blockquote')) || smmIsQuoteEditorLine(ownText);
+      if (inQuote !== el.classList.contains('smm-ed-quote')) el.classList.toggle('smm-ed-quote', inQuote);
+      const want = on && (inQuote || smmIsVerseEditorLine(ownText));
       if (want !== el.classList.contains('smm-ed-verse')) el.classList.toggle('smm-ed-verse', want);
       if (want) {
         n++;
@@ -5803,48 +8814,101 @@ function smmPaintReadingVerses(root, plugin) {
  * 다른 서식(굵게 등)과 겹쳐서 글이 여러 조각으로 나뉜 복잡한 경우는 억지로 합치지
  * 않고 건너뛴다(구조를 깨뜨릴 위험이 있는 것보다는 그 한 곳만 고쳐지지 않는 게 낫다).
  */
-function smmFixReadingHighlightSpacing(root) {
+/**
+ * 목록 항목 아래 탭(4칸 들여쓰기)으로 작성한 인용문(`\t> (요 8:12)...`)이
+ * CommonMark 사양상 들여쓰기 코드블록(`<pre><code>`)으로 잘못 파싱되는 현상을 교정한다.
+ * 읽기 화면 및 강대상 화면에서 코드블록 대신 진짜 blockquote로 복원하여
+ * 성경구절 배지와 강조(==...==)가 정상 렌더링되도록 한다.
+ */
+function smmFixIndentedReadingQuotes(root) {
   try {
     if (!root || !root.querySelectorAll) return 0;
-    if (root.closest && root.closest('.smm-node')) return 0;
-    if (typeof document === 'undefined' || !document.createTreeWalker) return 0;
+    const pres = root.querySelectorAll('pre');
+    let fixed = 0;
+    for (let i = 0; i < pres.length; i++) {
+      const pre = pres[i];
+      const code = pre.querySelector('code');
+      const text = (code ? code.textContent : pre.textContent) || '';
+      const lines = text.split('\n');
+      const nonEmpty = lines.filter(l => l.trim().length > 0);
+      if (nonEmpty.length === 0) continue;
+      if (/^\s*>/.test(nonEmpty[0])) {
+        const bq = document.createElement('blockquote');
+        const p = document.createElement('p');
+        const unquotedLines = lines.map(l => l.replace(/^\s*>[ \t]?/, ''));
+        p.innerHTML = unquotedLines.map(l => renderInline(l)).join('<br>');
+        bq.appendChild(p);
+        if (pre.parentNode) {
+          pre.parentNode.replaceChild(bq, pre);
+          fixed++;
+        }
+      }
+    }
+    return fixed;
+  } catch (e) { return 0; }
+}
+
+/**
+ * 편집 화면에서 "== 강조 =="처럼 등호 안쪽에 띄어쓰기를 넣었거나 한글 조사 등이 붙어
+ * 옵시디언 기본 마크다운 파서가 하이라이트로 인식하지 못하고 "=="가 글자로 남아버린 자리를 교정한다.
+ * 원문은 건드리지 않고, DOM에 남은 "=="를 찾아 <mark> 또는 성경구절 배지(<span class="smm-verse-ref">)로 감싼다.
+ */
+function smmFixReadingHighlightSpacing(root) {
+  try {
+    if (!root || typeof document === 'undefined' || !document.createTreeWalker) return 0;
     let n = 0;
-    const blocks = root.querySelectorAll('p, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, div');
+    try {
+      const existingMarks = root.querySelectorAll('mark');
+      for (let mi = 0; mi < existingMarks.length; mi++) {
+        const mk = existingMarks[mi];
+        if (mk.classList.contains('smm-verse-ref')) continue;
+        const mt = mk.textContent.trim();
+        SMR_VERSE_REF_RE.lastIndex = 0;
+        if (SMR_VERSE_REF_RE.test(mt)) {
+          mk.classList.add('smm-verse-ref');
+        }
+      }
+    } catch (e) {}
+
+    const walker = document.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+    const texts = [];
+    let node;
+    while ((node = walker.nextNode())) {
+      const pe = node.parentElement;
+      if (pe && pe.closest('pre, code, mark, .smm-verse-ref')) continue;
+      if (node.nodeValue && node.nodeValue.indexOf('==') !== -1) texts.push(node);
+    }
     const re = /==\s*([^=\n]+?)\s*==/g;
-    for (let bi = 0; bi < blocks.length; bi++) {
-      const block = blocks[bi];
-      try {
-        if (block.closest('pre, code, mark')) continue;
-        const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-        const texts = [];
-        let node;
-        while ((node = walker.nextNode())) {
-          if (node.parentElement && node.parentElement.closest('pre, code, mark')) continue;
-          if (node.nodeValue && node.nodeValue.indexOf('==') !== -1) texts.push(node);
+    for (let ti = 0; ti < texts.length; ti++) {
+      const t = texts[ti];
+      const orig = t.nodeValue;
+      re.lastIndex = 0;
+      if (!re.test(orig)) continue;
+      re.lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      let last = 0, m, changed = false;
+      while ((m = re.exec(orig))) {
+        if (!m[1] || m[1].trim() === '') continue;
+        frag.appendChild(document.createTextNode(orig.slice(last, m.index)));
+        const trimmed = m[1].trim();
+        SMR_VERSE_REF_RE.lastIndex = 0;
+        if (SMR_VERSE_REF_RE.test(trimmed)) {
+          const sp = document.createElement('span');
+          sp.className = 'smm-verse-ref';
+          sp.textContent = trimmed;
+          frag.appendChild(sp);
+        } else {
+          const mark = document.createElement('mark');
+          mark.textContent = m[1];
+          frag.appendChild(mark);
         }
-        for (let ti = 0; ti < texts.length; ti++) {
-          const t = texts[ti];
-          const orig = t.nodeValue;
-          re.lastIndex = 0;
-          if (!re.test(orig)) continue;
-          re.lastIndex = 0;
-          const frag = document.createDocumentFragment();
-          let last = 0, m, changed = false;
-          while ((m = re.exec(orig))) {
-            if (!m[1] || m[1].trim() === '') continue;
-            frag.appendChild(document.createTextNode(orig.slice(last, m.index)));
-            const mark = document.createElement('mark');
-            mark.textContent = m[1];
-            frag.appendChild(mark);
-            last = re.lastIndex;
-            changed = true;
-            n++;
-          }
-          if (!changed) continue;
-          frag.appendChild(document.createTextNode(orig.slice(last)));
-          if (t.parentNode) t.parentNode.replaceChild(frag, t);
-        }
-      } catch (e) { /* 이 덩어리만 건너뛰고 계속 */ }
+        last = re.lastIndex;
+        changed = true;
+        n++;
+      }
+      if (!changed) continue;
+      frag.appendChild(document.createTextNode(orig.slice(last)));
+      if (t.parentNode) t.parentNode.replaceChild(frag, t);
     }
     return n;
   } catch (e) { return 0; }
@@ -5860,11 +8924,13 @@ function smmLineDocShim(text) {
 
 // 파일 글이 같으면(같은 파일을 이 문단 저 문단 여러 번 훑을 때) 다시 계산하지 않게
 // 아주 단순한 1개짜리 캐시. 파일을 바꿔 열면 text가 달라지므로 자동으로 새로 계산됨.
-let _smmBodyMarksCache = { text: null, marks: null };
-function smmGetLineMarksCached(text) {
-  if (_smmBodyMarksCache.text === text) return _smmBodyMarksCache.marks;
-  const marks = smmClassifyLineMarks(smmLineDocShim(text));
-  _smmBodyMarksCache = { text, marks };
+let _smmBodyMarksCache = { text: null, marks: null, cfgKey: null };
+function smmGetLineMarksCached(text, plugin) {
+  const cfg = plugin ? plugin.settings : null;
+  const cfgKey = cfg ? `${cfg.markStrongIcon || '✓'}|${cfg.markMidIcon || 'ㆍ'}|${cfg.markSubIcon || '-'}` : '';
+  if (_smmBodyMarksCache.text === text && _smmBodyMarksCache.cfgKey === cfgKey) return _smmBodyMarksCache.marks;
+  const marks = smmClassifyLineMarks(smmLineDocShim(text), plugin);
+  _smmBodyMarksCache = { text, marks, cfgKey };
   return marks;
 }
 
@@ -5920,6 +8986,26 @@ function smmSyncRvSlotCell(target, hasMark) {
   return slot.firstChild;
 }
 
+function smmStripLeadingExplicitMarkFromTarget(target, mark) {
+  if (!target || !mark) return;
+  let textCell = null;
+  for (let c = target.firstElementChild; c; c = c.nextElementSibling) {
+    if (c.classList && c.classList.contains('smm-rv-text-cell')) {
+      textCell = c;
+      break;
+    }
+  }
+  if (!textCell) return;
+  const walker = document.createTreeWalker(textCell, 4 /* NodeFilter.SHOW_TEXT */);
+  const firstText = walker.nextNode();
+  if (firstText && firstText.nodeValue) {
+    const rx = new RegExp('^[ \\t]*(?:[✓✔][ \\t]+)?' + smmEscapeRegExp(mark) + '[ \\t]*');
+    if (rx.test(firstText.nodeValue)) {
+      firstText.nodeValue = firstText.nodeValue.replace(rx, '');
+    }
+  }
+}
+
 /**
  * 읽기 화면에도 편집 화면과 같은 ✓/ㆍ/- 몸말 표시(smmBuildEditorVMarkExtension이
  * 편집 화면에 붙이는 것과 같은 표시)를 붙인다.
@@ -5938,20 +9024,21 @@ function smmSyncRvSlotCell(target, hasMark) {
 function smmPaintReadingBodyMarks(el, ctx, plugin) {
   try {
     if (!el || !ctx || typeof ctx.getSectionInfo !== 'function') return 0;
-    if (!plugin.settings || plugin.settings.edShowVMark === false) return 0;
+    if (!plugin || !plugin.settings || plugin.settings.edShowVMark === false) return 0;
     if (el.closest && el.closest('.smm-node')) return 0;
     // 목록 덩어리는 편집 화면과 똑같이 보이도록 따로 처리한다(읽기 화면 = 편집 화면의 "잠금").
-    const rootLists = el.querySelectorAll(':scope > ul');
+    const rootLists = el.tagName === 'UL' ? [el] : el.querySelectorAll(':scope > ul');
     if (rootLists.length) {
       let infoL = null;
       try { infoL = ctx.getSectionInfo(el); } catch (e) { infoL = null; }
       let n = 0;
-      for (let i = 0; i < rootLists.length; i++) n += smmPaintReadingList(rootLists[i], infoL);
+      for (let i = 0; i < rootLists.length; i++) n += smmPaintReadingList(rootLists[i], infoL, plugin);
       return n;
     }
     const info = ctx.getSectionInfo(el);
     if (!info || info.lineStart == null || info.lineEnd == null) return 0;
-    const marks = smmGetLineMarksCached(info.text);
+    if (smmHasVMarkDisabledFrontmatter(info.text)) return 0;
+    const marks = smmGetLineMarksCached(info.text, plugin);
     if (!marks || marks.size === 0) return 0;
 
     // 이 조각의 원문 줄 범위(0-based, 양끝 포함) 안에서, 빈 줄로 나뉜 덩어리마다
@@ -5976,8 +9063,13 @@ function smmPaintReadingBodyMarks(el, ctx, plugin) {
     let n = 0;
     for (let i = 0; i < els.length; i++) {
       const target = els[i];
-      const mark = chunks[i].mark;
-      const strong = mark === SMR_LINE_MARKS[0];
+      const rawMark = chunks[i].mark;
+      const mark = rawMark ? (typeof rawMark === 'object' ? rawMark.mark : rawMark) : null;
+      const isExplicit = rawMark && typeof rawMark === 'object' && rawMark.explicit;
+      const rawDepth = (rawMark && typeof rawMark === 'object' && rawMark.depth != null) ? rawMark.depth : 0;
+      const isSub = SMM_SUB_MARKS_SET.has(mark) || (rawMark && rawMark.isSub);
+      const isSubNode = isSub || (rawDepth > 0) || !!target.closest('li li') || !!target.closest('ul ul') || !!target.closest('ol ol') || !!target.closest('ol ul') || !!target.closest('ul ol');
+      const strong = !isSubNode && smmIsStrongMark(mark, plugin ? plugin.settings : null);
       // ✓ 줄은 편집 화면의 smm-ed-vline-strong과 똑같이 줄(문단/목록 항목) 자체에도
       // 같은 class를 달아, ✓ 줄 글자색·폰트·크기가 읽기 보기에도 똑같이 적용되게 한다.
       try {
@@ -5990,8 +9082,12 @@ function smmPaintReadingBodyMarks(el, ctx, plugin) {
       const span = smmSyncRvSlotCell(target, !!mark);
       if (!mark) continue;
       if (span.textContent !== mark || span.className.indexOf('smm-ed-vmark') === -1) {
-        span.className = 'smm-ed-vmark' + (strong ? ' smm-ed-vmark-strong' : '');
+        const wideCls = (strong && smmIsWideMark(mark)) ? ' smm-mark-wide' : '';
+        span.className = 'smm-ed-vmark' + (strong ? (' smm-ed-vmark-strong' + wideCls) : (isSubNode ? ' smm-ed-vmark-sub' : ''));
         span.textContent = mark;
+      }
+      if (isExplicit) {
+        smmStripLeadingExplicitMarkFromTarget(target, mark);
       }
       n++;
     }
@@ -6013,13 +9109,13 @@ function smmPaintReadingBodyMarks(el, ctx, plugin) {
  * 그것을, 없으면 편집 화면의 옵시디언 기본 모양과 같게 맨 윗단은 "•", 그 아래는 "-".
  * 번호 목록(<ol>) 항목은 편집 화면처럼 번호를 그대로 두고 건드리지 않는다.
  */
-function smmPaintReadingList(ul, info) {
+function smmPaintReadingList(ul, info, plugin) {
   if (!ul || !ul.querySelectorAll) return 0;
-  ul.classList.add('smm-rv-list');
   const lis = Array.prototype.slice.call(ul.querySelectorAll('li'));
   let lineOf = null;
   let marks = null;
   if (info && info.text != null && info.lineStart != null && info.lineEnd != null) {
+    if (smmHasVMarkDisabledFrontmatter(info.text)) return 0;
     const lines = String(info.text).split(/\r?\n/);
     const listLines = [];
     for (let ln = info.lineStart; ln <= info.lineEnd; ln++) {
@@ -6028,7 +9124,7 @@ function smmPaintReadingList(ul, info) {
     }
     if (listLines.length === lis.length) {
       lineOf = listLines;
-      try { marks = smmGetLineMarksCached(info.text); } catch (e) { marks = null; }
+      try { marks = smmGetLineMarksCached(info.text, plugin); } catch (e) { marks = null; }
     }
   }
   let n = 0;
@@ -6036,24 +9132,79 @@ function smmPaintReadingList(ul, info) {
     const li = lis[i];
     const parent = li.parentElement;
     if (!parent || parent.tagName !== 'UL') continue; // 번호 목록은 그대로
+    let rawMark = null;
+    if (lineOf && marks) rawMark = marks.get(lineOf[i] + 1) || null;
+    const mark = rawMark ? (typeof rawMark === 'object' ? rawMark.mark : rawMark) : null;
+    const isExplicit = !!(rawMark && typeof rawMark === 'object' && rawMark.explicit);
+
+    // 사용자의 명시적 마크(✓ 등)가 없는 일반 기본 목록 줄은
+    // 옵시디언 기본 글머리(•)가 그대로 나오게 두어 편집 모드와 100% 동일하게 유지
+    // (기존에 •나 -를 억지로 덧붙여서 '••'나 '•-'로 겹치던 버그 해결)
+    if (!mark || !isExplicit) {
+      smmSyncRvSlotCell(li, false);
+      li.classList.remove('smm-rv-li', 'smm-ed-vline-strong', 'smm-rv-strong');
+      continue;
+    }
+
+    ul.classList.add('smm-rv-list');
     if (parent !== ul) parent.classList.add('smm-rv-ul');
-    let mark = null;
-    if (lineOf && marks) mark = marks.get(lineOf[i] + 1) || null;
-    const isDefault = !mark;
-    if (!mark) mark = parent === ul ? '•' : '-';
-    const strong = mark === SMR_LINE_MARKS[0];
+    const rawDepth = (rawMark && typeof rawMark === 'object' && rawMark.depth != null) ? rawMark.depth : 0;
+    const isSub = SMM_SUB_MARKS_SET.has(mark) || (rawMark && rawMark.isSub);
+    const isSubNode = isSub || (rawDepth > 0) || (parent !== ul) || !!li.closest('li li') || !!li.closest('ul ul') || !!li.closest('ol ol') || !!li.closest('ol ul') || !!li.closest('ul ol');
+    const strong = !isSubNode && smmIsStrongMark(mark, plugin ? plugin.settings : null);
     li.classList.add('smm-rv-li');
     li.classList.toggle('smm-ed-vline-strong', strong);
     li.classList.toggle('smm-rv-strong', strong);
-    // 표시 자리(smm-rv-slot)와 나머지 글(smm-rv-text-cell)을 표(table)의 두 칸으로
-    // 나눠 자동으로 정렬한다(smmSyncRvSlotCell) — 그 안의 표시 글자는 편집 화면과
-    // 같은 class(smm-ed-vmark/-strong)라 색·크기·굵기가 편집 화면과 똑같이 나온다.
+
     const span = smmSyncRvSlotCell(li, true);
-    span.className = 'smm-ed-vmark' + (strong ? ' smm-ed-vmark-strong' : '') + (isDefault ? ' smm-rv-default' + (mark === '•' ? ' smm-rv-dot' : '') : '');
+    span.className = 'smm-ed-vmark' + (strong ? ' smm-ed-vmark-strong' : (isSubNode ? ' smm-ed-vmark-sub' : ''));
     span.textContent = mark;
+
+    if (isExplicit) {
+      smmStripLeadingExplicitMarkFromTarget(li, mark);
+    }
+    const b = li.querySelector('.list-bullet');
+    if (b) b.style.display = 'none';
     n++;
   }
+  if (n === 0) {
+    ul.classList.remove('smm-rv-list', 'smm-rv-ul');
+  }
   return n;
+}
+
+/**
+ * 옵시디언 기본 읽기 화면에서 줄 끝의 %%shade:<색><단계>%%를 읽어
+ * 해당 블록(문단 p, 목록 li, 제목 h1~h6 등)에 .smm-line-shade .smm-shade-<색><단계>를 입힌다.
+ */
+function smmPaintReadingShades(el, ctx) {
+  try {
+    if (!el || !ctx || typeof ctx.getSectionInfo !== 'function') return;
+    if (el.closest && el.closest('.smm-node, .smr-root')) return;
+    const info = ctx.getSectionInfo(el);
+    if (!info || info.lineStart == null || info.lineEnd == null) return;
+    const lines = info.text.split(/\r?\n/);
+    for (let ln = info.lineStart; ln <= info.lineEnd; ln++) {
+      const raw = lines[ln];
+      if (!raw) continue;
+      const m = raw.match(SMM_SHADE_RE);
+      if (m) {
+        const cls = 'smm-shade-' + m[1] + m[2];
+        if (/^#{1,6}\s/.test(raw.trim())) {
+          const h = el.querySelector('h1, h2, h3, h4, h5, h6') || (el.matches('h1, h2, h3, h4, h5, h6') ? el : null);
+          if (h) h.classList.add('smm-line-shade', cls);
+        } else if (/^\s*(?:[-*+]|\d+[.)])\s+/.test(raw)) {
+          const lis = el.querySelectorAll('li');
+          for (let li of lis) {
+            li.classList.add('smm-line-shade', cls);
+          }
+        } else {
+          const p = el.querySelector('p') || (el.matches('p') ? el : el);
+          if (p) p.classList.add('smm-line-shade', cls);
+        }
+      }
+    }
+  } catch (e) { /* 무시 */ }
 }
 
 /**
@@ -6063,7 +9214,6 @@ function smmPaintReadingList(ul, info) {
 function smmPaintReadingVerseRefs(root) {
   try {
     if (!root || typeof document === 'undefined' || !document.createTreeWalker) return 0;
-    if (root.closest && root.closest('.smm-node')) return 0;
     const walker = document.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
     const targets = [];
     let t;
@@ -6083,7 +9233,16 @@ function smmPaintReadingVerseRefs(root) {
       SMR_VERSE_REF_RE.lastIndex = 0;
       let m;
       while ((m = SMR_VERSE_REF_RE.exec(v))) {
-        if (m.index > last) frag.appendChild(document.createTextNode(v.slice(last, m.index)));
+        if (m.index > last) {
+          const sliceText = v.slice(last, m.index);
+          if (/\n\s*$/.test(sliceText)) {
+            const cleanSlice = sliceText.replace(/\n\s*$/, '');
+            if (cleanSlice) frag.appendChild(document.createTextNode(cleanSlice));
+            frag.appendChild(document.createElement('br'));
+          } else {
+            frag.appendChild(document.createTextNode(sliceText));
+          }
+        }
         const sp = document.createElement('span');
         sp.className = 'smm-verse-ref';
         sp.textContent = m[0];
@@ -6094,6 +9253,75 @@ function smmPaintReadingVerseRefs(root) {
       }
       if (last < v.length) frag.appendChild(document.createTextNode(v.slice(last)));
       node.parentNode.replaceChild(frag, node);
+    }
+    return n;
+  } catch (e) { return 0; }
+}
+
+/**
+ * [대괄호] 강조 — 강대상 읽기 모드 및 읽기 보기에서 [단어] 형태의 표기를
+ * <span class="smm-bracket">[단어]</span>로 감싸 파란색/하늘색 굵은 글씨로 강조한다.
+ */
+function smmPaintReadingBrackets(root) {
+  try {
+    if (!root || typeof document === 'undefined' || !document.createTreeWalker) return 0;
+    const walker = document.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+    const targets = [];
+    let t;
+    const bracketRe = /(^|[^\[])\[([^\[\]\n\r]+)\](?!\(|\])/g;
+    while ((t = walker.nextNode())) {
+      const v = t.nodeValue;
+      if (!v || v.indexOf('[') === -1) continue;
+      const pe = t.parentElement;
+      if (!pe || (pe.closest && pe.closest('code, pre, a, .internal-link, .smm-bracket, .smm-verse-ref'))) continue;
+      bracketRe.lastIndex = 0;
+      if (bracketRe.test(v)) targets.push(t);
+    }
+    let n = 0;
+    for (const node of targets) {
+      const v = node.nodeValue;
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      bracketRe.lastIndex = 0;
+      let m;
+      while ((m = bracketRe.exec(v))) {
+        const prefixLen = m[1] ? m[1].length : 0;
+        const bracketStart = m.index + prefixLen;
+        if (bracketStart > last) frag.appendChild(document.createTextNode(v.slice(last, bracketStart)));
+        const sp = document.createElement('span');
+        sp.className = 'smm-bracket';
+
+        const openSpan = document.createElement('span');
+        openSpan.className = 'smm-bracket-edge';
+        openSpan.textContent = '[';
+        openSpan.style.setProperty('color', 'var(--text-faint, #9ca3af)', 'important');
+        openSpan.style.setProperty('opacity', '0.7', 'important');
+        openSpan.style.setProperty('font-weight', 'normal', 'important');
+
+        const textSpan = document.createElement('span');
+        textSpan.className = 'smm-bracket-text';
+        textSpan.textContent = m[2];
+        textSpan.style.setProperty('color', 'var(--text-accent)', 'important');
+        textSpan.style.setProperty('font-weight', '600', 'important');
+
+        const closeSpan = document.createElement('span');
+        closeSpan.className = 'smm-bracket-edge';
+        closeSpan.textContent = ']';
+        closeSpan.style.setProperty('color', 'var(--text-faint, #9ca3af)', 'important');
+        closeSpan.style.setProperty('opacity', '0.7', 'important');
+        closeSpan.style.setProperty('font-weight', 'normal', 'important');
+
+        sp.appendChild(openSpan);
+        sp.appendChild(textSpan);
+        sp.appendChild(closeSpan);
+        frag.appendChild(sp);
+
+        last = m.index + m[0].length;
+        n++;
+        if (m[0].length === 0) bracketRe.lastIndex++;
+      }
+      if (last < v.length) frag.appendChild(document.createTextNode(v.slice(last)));
+      if (node.parentNode) node.parentNode.replaceChild(frag, node);
     }
     return n;
   } catch (e) { return 0; }
@@ -6113,32 +9341,68 @@ function smmPaintReadingVerseRefs(root) {
 function smmMarkLineCss(s) {
   s = s || {};
   const ed = '.markdown-source-view.mod-cm6 .cm-line.smm-ed-vline-strong';
-  const rv = '.markdown-rendered:not(.smr-flow) .smm-ed-vline-strong';
+  const rv = [
+    '.markdown-rendered:not(.smr-flow) p.smm-ed-vline-strong',
+    '.markdown-rendered:not(.smr-flow) p.smm-ed-vline-strong > .smm-rv-text-cell',
+    '.markdown-rendered:not(.smr-flow) p.smm-ed-vline-strong > .smm-rv-text-cell *',
+    '.markdown-rendered:not(.smr-flow) p.smm-rv-body-strong',
+    '.markdown-rendered:not(.smr-flow) p.smm-rv-body-strong > .smm-rv-text-cell',
+    '.markdown-rendered:not(.smr-flow) p.smm-rv-body-strong > .smm-rv-text-cell *',
+    '.markdown-rendered:not(.smr-flow) li.smm-ed-vline-strong:not(li li)',
+    '.markdown-rendered:not(.smr-flow) li.smm-ed-vline-strong:not(li li) > .smm-rv-text-cell',
+    '.markdown-rendered:not(.smr-flow) li.smm-ed-vline-strong:not(li li) > .smm-rv-text-cell *',
+    '.markdown-rendered:not(.smr-flow) li.smm-rv-strong:not(li li)',
+    '.markdown-rendered:not(.smr-flow) li.smm-rv-strong:not(li li) > .smm-rv-text-cell',
+    '.markdown-rendered:not(.smr-flow) li.smm-rv-strong:not(li li) > .smm-rv-text-cell *'
+  ].join(', ');
   const mm = '.smm-node .smm-node-vline-strong';
-  const reset = `${rv} > ul, ${rv} > ol`;
+  const reset = [
+    '.markdown-rendered:not(.smr-flow) .smm-ed-vline-strong > ul',
+    '.markdown-rendered:not(.smr-flow) .smm-ed-vline-strong > ol',
+    '.markdown-rendered:not(.smr-flow) li li.smm-ed-vline-strong',
+    '.markdown-rendered:not(.smr-flow) li li.smm-ed-vline-strong *',
+    '.markdown-rendered:not(.smr-flow) li li .smm-rv-text-cell',
+    '.markdown-rendered:not(.smr-flow) li li .smm-rv-text-cell *',
+    '.markdown-rendered:not(.smr-flow) ul ul .smm-rv-text-cell',
+    '.markdown-rendered:not(.smr-flow) ol ul .smm-rv-text-cell',
+    '.markdown-rendered:not(.smr-flow) ul ol .smm-rv-text-cell',
+    '.markdown-rendered:not(.smr-flow) ol ol .smm-rv-text-cell'
+  ].join(', ');
   let css = '';
   const f = String(s.markLineFont || '').trim();
   if (f) {
     const st = smmFontStack(f, 'markline');
-    css += `${ed},${rv},${mm}{font-family:${st} !important;}`;
-    css += `${reset}{font-family:var(--font-text) !important;}`;
+    css += `${ed}, ${rv}, ${mm} { font-family: ${st} !important; font-weight: bold !important; line-height: 1.4 !important; }\n`;
+    css += `${reset} { font-family: var(--font-text) !important; font-weight: normal !important; }\n`;
   }
   const px = smmNumOr(s.markLineSize, 0);
   if (px > 0) {
-    css += `${ed},${rv}{font-size:${px}px !important;}`;
-    css += `${reset}{font-size:revert !important;}`;
+    css += `${ed}, ${rv} { font-size: ${px}px !important; }\n`;
+    css += `${reset} { font-size: revert !important; }\n`;
     // 마인드맵은 화면 전체가 편집 화면보다 작은 기준 글자 크기(--smm-mm-size-body)로
     // 그려지므로, 같은 px를 그대로 주면 ✓ 줄만 다른 글자보다 훨씬 커진다("마인드맵 V 줄
     // 글자가 편집모드보다 더 크게 보임"). 편집 화면에서 ✓ 줄이 본문보다 몇 배인지
     // (px ÷ 편집 화면 기준 크기)를 그대로 마인드맵 기준 크기에 곱해서 맞춘다.
-    let edBase = 0;
-    try {
-      const v = getComputedStyle(document.body).getPropertyValue('--font-text-size');
-      edBase = parseFloat(v) || 0;
-    } catch (e) { edBase = 0; }
+    let edBase = smmNumOr(s.edSizeBody, 0);
+    if (!(edBase > 0)) {
+      try {
+        const v = getComputedStyle(document.body).getPropertyValue('--font-text-size');
+        edBase = parseFloat(v) || 0;
+      } catch (e) { edBase = 0; }
+    }
     if (!(edBase > 0)) edBase = 16;
     const ratio = Math.round((px / edBase) * 10000) / 10000;
-    css += `.smm-nodes .smm-node .smm-node-vline-strong{font-size:calc(var(--smm-mm-size-body, 13.5px) * ${ratio}) !important;}`;
+    css += `.smm-nodes .smm-node .smm-node-vline-strong{font-size:calc(var(--smm-mm-size-body, 13.5px) * ${ratio}) !important;}\n`;
+  }
+  const lCol = smmHexOr(s.markStrongLightTextColor, '');
+  if (lCol) {
+    css += `body:not(.theme-dark) ${ed},` +
+      `body:not(.theme-dark) ${ed} *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref):not(.smm-ed-vmark-strong),` +
+      `body:not(.theme-dark) ${rv},` +
+      `body:not(.theme-dark) ${rv} *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref):not(.smm-ed-vmark-strong),` +
+      `body:not(.theme-dark) ${mm},` +
+      `body:not(.theme-dark) ${mm} *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref):not(.smm-node-mark-strong){color:#${lCol} !important;}`;
+    css += `body:not(.theme-dark) ${reset}{color:var(--text-normal) !important;}`;
   }
   return css;
 }
@@ -6236,20 +9500,48 @@ function smmCaretCss(s) {
 }
 
 function smmGlobalHeadFontCss(s) {
+  let css = '';
   const f = String((s && s.rdFontHead) || '').trim();
-  if (!f) return '';
-  const st = smmFontStack(f, 'rdhead');
-  return `.markdown-source-view.mod-cm6 .cm-line[class*="HyperMD-header"]{font-family:${st} !important;}` +
-    `.markdown-rendered:not(.smr-flow) h1,.markdown-rendered:not(.smr-flow) h2,.markdown-rendered:not(.smr-flow) h3,.markdown-rendered:not(.smr-flow) h4,.markdown-rendered:not(.smr-flow) h5,.markdown-rendered:not(.smr-flow) h6{font-family:${st} !important;}`;
+  const rvH = '.markdown-rendered:not(.smr-flow):not(.smm-probe-holder)';
+  if (f) {
+    const st = smmFontStack(f, 'rdhead');
+    css += `.markdown-source-view.mod-cm6 .cm-line[class*="HyperMD-header"]{font-family:${st} !important;}` +
+      `${rvH} h1,${rvH} h2,${rvH} h3,${rvH} h4,${rvH} h5,${rvH} h6{font-family:${st} !important;}`;
+  }
+  // 편집 화면 및 기본 읽기 보기의 제목 1~6단계 글자 크기(px) 및 색상 (밝은 테마 / 다크 모드)
+  // ==TEXT== 하이라이트(.cm-highlight, .smm-hlc, mark)와 충돌하지 않도록 줄 자체 및 하이라이트 제외 하위요소에 적용
+  for (let lv = 1; lv <= 6; lv++) {
+    const hPx = smmNumOr(s && s['edSizeH' + lv], 0);
+    if (hPx > 0) {
+      css += `.markdown-source-view.mod-cm6 .cm-line.HyperMD-header-${lv},` +
+        `.markdown-source-view.mod-cm6 .cm-line.HyperMD-header-${lv} .cm-header-${lv},` +
+        `${rvH} h${lv}{font-size:${hPx}px !important;}\n`;
+    }
+    const cLight = smmHexOr(s && s['edColorH' + lv], '');
+    const cDark = smmHexOr(s && s['edColorDarkH' + lv], '');
+    if (cLight) {
+      css += `body:not(.theme-dark) .markdown-source-view.mod-cm6 .cm-line.HyperMD-header-${lv},` +
+        `body:not(.theme-dark) .markdown-source-view.mod-cm6 .cm-line.HyperMD-header-${lv} *:not(.cm-highlight):not(.smm-hlc):not(mark),` +
+        `body:not(.theme-dark) ${rvH} h${lv},` +
+        `body:not(.theme-dark) ${rvH} h${lv} *:not(.cm-highlight):not(.smm-hlc):not(mark){color:#${cLight} !important;}\n`;
+    }
+    if (cDark) {
+      css += `body.theme-dark .markdown-source-view.mod-cm6 .cm-line.HyperMD-header-${lv},` +
+        `body.theme-dark .markdown-source-view.mod-cm6 .cm-line.HyperMD-header-${lv} *:not(.cm-highlight):not(.smm-hlc):not(mark),` +
+        `body.theme-dark ${rvH} h${lv},` +
+        `body.theme-dark ${rvH} h${lv} *:not(.cm-highlight):not(.smm-hlc):not(mark){color:#${cDark} !important;}\n`;
+    }
+  }
+  return css;
 }
 
 /**
- * 편집 화면(코드미러)의 성경구절 줄에 입힐 CSS 규칙.
+ * 편집 화면(코드미러)의 성경구절 줄 및 인용문(>) 줄에 입힐 CSS 규칙.
  *
  * 편집기는 자기 화면을 스스로 관리하기 때문에, 밖에서 요소에 직접 글꼴을 넣어 두면
  * 편집기가 그 줄을 다시 그릴 때 통째로 지워 버린다(읽기 화면만 되고 편집 화면은
- * 안 되던 원인). 그래서 표시(class)는 편집기가 달게 하고, 글꼴은 이 규칙으로 입힌다.
- * 글꼴 이름을 CSS 변수로 넘기지 않고 그대로 적어 두어, 변수 상태와 무관하게 항상 맞는다.
+ * 안 되던 원인). 그래서 표시(class)는 편집기가 달게 하고, 글꼴/색상은 이 규칙으로 입힌다.
+ * 하이라이트(==TEXT==, .cm-highlight, .smm-hlc, mark) 및 장절 배지(.smm-verse-ref)는 손상되지 않도록 보호한다.
  */
 function smmEditorVerseCss(s) {
   const stack = smmFontStackVerse(s && s.mmFontVerse, 'verse');
@@ -6265,6 +9557,87 @@ function smmEditorVerseCss(s) {
   let css = `${sel}{font-family:${stack} !important;}`;
   if (px > 0) {
     css += `.cm-editor .cm-line.smm-ed-verse,.markdown-source-view .cm-line.smm-ed-verse{font-size:${px}px !important;}`;
+  }
+
+  // 1. 성경구절 줄 글자 색상 (밝은 테마 / 다크 모드)
+  const vLight = smmHexOr(s && s.edColorVerse, '');
+  const vDark = smmHexOr(s && s.edColorDarkVerse, '');
+  if (vLight) {
+    css += `body:not(.theme-dark) .markdown-source-view.mod-cm6 .cm-line.smm-ed-verse,` +
+      `body:not(.theme-dark) .markdown-source-view.mod-cm6 .cm-line.smm-ed-verse *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref),` +
+      `body:not(.theme-dark) .markdown-rendered:not(.smr-flow) .smm-ed-verse,` +
+      `body:not(.theme-dark) .markdown-rendered:not(.smr-flow) .smm-ed-verse *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref){color:#${vLight} !important;}\n`;
+  }
+  if (vDark) {
+    css += `body.theme-dark .markdown-source-view.mod-cm6 .cm-line.smm-ed-verse,` +
+      `body.theme-dark .markdown-source-view.mod-cm6 .cm-line.smm-ed-verse *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref),` +
+      `body.theme-dark .markdown-rendered:not(.smr-flow) .smm-ed-verse,` +
+      `body.theme-dark .markdown-rendered:not(.smr-flow) .smm-ed-verse *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref){color:#${vDark} !important;}\n`;
+  }
+
+  // 2. 인용문(>) 글자 색상 (밝은 테마 / 다크 모드)
+  const qLight = smmHexOr(s && s.edColorQuote, '');
+  const qDark = smmHexOr(s && s.edColorDarkQuote, '');
+  if (qLight) {
+    css += `body:not(.theme-dark) .markdown-source-view.mod-cm6 .cm-line.HyperMD-quote,` +
+      `body:not(.theme-dark) .markdown-source-view.mod-cm6 .cm-line.HyperMD-quote *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref),` +
+      `body:not(.theme-dark) .markdown-source-view.mod-cm6 .cm-line.smm-ed-quote,` +
+      `body:not(.theme-dark) .markdown-source-view.mod-cm6 .cm-line.smm-ed-quote *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref):not(.list-bullet):not(.cm-formatting-list):not(.smm-ed-vmark),` +
+      `body:not(.theme-dark) .markdown-rendered:not(.smr-flow) blockquote,` +
+      `body:not(.theme-dark) .markdown-rendered:not(.smr-flow) blockquote *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref),` +
+      `body:not(.theme-dark) .markdown-rendered:not(.smr-flow) .smm-ed-quote,` +
+      `body:not(.theme-dark) .markdown-rendered:not(.smr-flow) .smm-ed-quote *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref):not(.list-bullet):not(.smm-ed-vmark){color:#${qLight} !important;}\n`;
+  }
+  if (qDark) {
+    css += `body.theme-dark .markdown-source-view.mod-cm6 .cm-line.HyperMD-quote,` +
+      `body.theme-dark .markdown-source-view.mod-cm6 .cm-line.HyperMD-quote *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref),` +
+      `body.theme-dark .markdown-source-view.mod-cm6 .cm-line.smm-ed-quote,` +
+      `body.theme-dark .markdown-source-view.mod-cm6 .cm-line.smm-ed-quote *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref):not(.list-bullet):not(.cm-formatting-list):not(.smm-ed-vmark),` +
+      `body.theme-dark .markdown-rendered:not(.smr-flow) blockquote,` +
+      `body.theme-dark .markdown-rendered:not(.smr-flow) blockquote *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref),` +
+      `body.theme-dark .markdown-rendered:not(.smr-flow) .smm-ed-quote,` +
+      `body.theme-dark .markdown-rendered:not(.smr-flow) .smm-ed-quote *:not(.cm-highlight):not(.smm-hlc):not(mark):not(.smm-verse-ref):not(.list-bullet):not(.smm-ed-vmark){color:#${qDark} !important;}\n`;
+  }
+
+  return css;
+}
+
+/**
+ * 편집 화면 및 옵시디언 기본 읽기 모드의 글자 행간 및 줄/항목 간 여백 CSS
+ */
+function smmEditorSpacingCss(s) {
+  s = s || {};
+  let css = '';
+  const bodyPx = smmNumOr(s.edSizeBody, 0);
+  const lh = smmNumOr(s.edLineHeight, 0);
+  const gap = smmNumOr(s.edParaGap, 0);
+
+  if (bodyPx > 0) {
+    css += `.markdown-source-view.mod-cm6 .cm-scroller, ` +
+           `.markdown-source-view.mod-cm6 .cm-content, ` +
+           `.markdown-rendered:not(.smr-flow):not(.smm-probe-holder) { font-size: ${bodyPx}px !important; --font-text-size: ${bodyPx}px !important; }\n`;
+  }
+
+  if (lh > 0) {
+    // 1. 편집 화면 (CodeMirror 6)
+    css += `.markdown-source-view.mod-cm6 .cm-line, ` +
+           `.markdown-source-view.mod-cm6 .cm-content { line-height: ${lh} !important; }\n`;
+    // 2. 옵시디언 기본 읽기 모드 (Reading View)
+    css += `.markdown-rendered:not(.smr-flow) p, ` +
+           `.markdown-rendered:not(.smr-flow) li, ` +
+           `.markdown-rendered:not(.smr-flow) blockquote { line-height: ${lh} !important; }\n`;
+  }
+
+  if (gap > 0) {
+    // 1. 편집 화면: V 항목(smm-ed-vline-strong) 아래쪽 여백만 적용
+    css += `.markdown-source-view.mod-cm6 .cm-line.smm-ed-vline-strong { padding-bottom: ${gap}px !important; }\n`;
+    // 2. 옵시디언 기본 읽기 모드: V 항목(smm-ed-vline-strong / smm-rv-body-strong) 아래쪽 여백만 적용
+    css += `.markdown-rendered:not(.smr-flow) p.smm-ed-vline-strong, ` +
+           `.markdown-rendered:not(.smr-flow) p.smm-rv-body-strong, ` +
+           `.markdown-rendered:not(.smr-flow) li.smm-ed-vline-strong, ` +
+           `.markdown-rendered:not(.smr-flow) li.smm-rv-body-strong { margin-bottom: ${gap}px !important; }\n`;
+    // 3. 강대상 모드: V 항목(.smr-vline-strong) 아래쪽 여백 적용
+    css += `.smr-root .smr-flow .smr-vline-strong { margin-bottom: ${gap}px !important; display: inline-table; }\n`;
   }
   return css;
 }
@@ -6395,7 +9768,10 @@ function smmPaintEditorVerses(root, plugin, countOnly) {
     let n = 0;
     for (let i = 0; i < lines.length; i++) {
       const el = lines[i];
-      const want = on && !smmIsHeaderLineEl(el) && smmIsVerseEditorLine(el.textContent);
+      const notHeader = !smmIsHeaderLineEl(el);
+      const isQuote = notHeader && smmIsQuoteEditorLine(el.textContent);
+      if (isQuote !== el.classList.contains('smm-ed-quote')) el.classList.toggle('smm-ed-quote', isQuote);
+      const want = on && notHeader && smmIsVerseEditorLine(el.textContent);
       if (smmApplyVerseStyle(el, want, stack, px)) n++;
     }
     return n;
@@ -6541,9 +9917,71 @@ function smrTidyHighlightSpacing(md) {
  *  이 배열은 "설교문 미리보기"·"편집 화면"(smmBuildEditorVMarkExtension)·
  *  워드 내보내기(buildBody)·마인드맵 본문 노드(smmMarkNodeBodyLines) 네 곳이
  *  모두 함께 쓰는 단일 기준이다. */
+/**
+ * 문서 맨 앞의 Frontmatter 속성(YAML)을 읽어
+ * 강대상 모드 상단에 10pt 인터페이스 폰트의 연한 회색 박스 카드로 렌더링
+ */
+function smrBuildFrontmatterBox(fmLines) {
+  if (!fmLines || !fmLines.length) return '';
+  const rows = [];
+  let curKey = null;
+  let curVals = [];
+
+  const flush = () => {
+    if (curKey) {
+      rows.push({ key: curKey, value: curVals.join(', ') });
+      curKey = null;
+      curVals = [];
+    }
+  };
+
+  for (const rawLine of fmLines) {
+    const line = rawLine.replace(/\r$/, '');
+    if (!line.trim()) continue;
+    const listM = line.match(/^\s*-\s+(.*)$/);
+    if (listM && curKey) {
+      curVals.push(listM[1].trim());
+      continue;
+    }
+    const kvM = line.match(/^([^:\s][^:]*)\s*:\s*(.*)$/);
+    if (kvM) {
+      flush();
+      curKey = kvM[1].trim();
+      const val = kvM[2].trim();
+      if (val) {
+        const arrM = val.match(/^\[(.*)\]$/);
+        if (arrM) {
+          const parts = arrM[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+          curVals.push(...parts);
+        } else {
+          curVals.push(val.replace(/^['"]|['"]$/g, ''));
+        }
+        flush();
+      }
+    }
+  }
+  flush();
+
+  if (!rows.length) return '';
+
+  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let html = '<div class="smr-frontmatter-box"><div class="smr-fm-grid">';
+  for (const r of rows) {
+    if (r.key.toLowerCase() === 'tags' || r.key === '태그') {
+      const tags = r.value.split(',').map((t) => t.trim()).filter(Boolean);
+      const tagPills = tags.map((t) => `<span class="smr-fm-pill">${esc(t)}</span>`).join(' ');
+      html += `<div class="smr-fm-item"><span class="smr-fm-key">${esc(r.key)}:</span> <span class="smr-fm-val">${tagPills}</span></div>`;
+    } else {
+      html += `<div class="smr-fm-item"><span class="smr-fm-key">${esc(r.key)}:</span> <span class="smr-fm-val">${esc(r.value)}</span></div>`;
+    }
+  }
+  html += '</div></div>';
+  return html;
+}
+
 const SMR_LINE_MARKS = ['✓', 'ㆍ', '-'];
 
-function smrPreserveLineBreaks(md) {
+function smrPreserveLineBreaks(md, cfg) {
   const src = String(md == null ? '' : md);
   const lines = src.split('\n');
   const out = [];
@@ -6564,76 +10002,46 @@ function smrPreserveLineBreaks(md) {
 
   // 몸말(본문) 줄 하나를 내보낸다 — 실제 목록(-, * 등) 기호를 뗀 목록 줄도
   // 이 함수를 그대로 거쳐서, 몸말과 똑같이 ✓/ㆍ/- 표시로 안전하게 보인다.
-  // overrideDepth: 목록 줄일 때 smmComputeListLineInfo로 미리 계산해 둔 "구조적
-  // 깊이"(제목으로부터 본문·목록이 몇 겹 쌓였는가) — 넘겨주면 w 기반 계산 대신
-  // 이 값을 쓴다. numberedBullet: 편집 화면에서 옵시디언이 저절로 번호를 매긴
-  // 목록이면 그 번호("1." 등) — 있으면 깊이 표시 대신 항상 이 번호를 그대로 쓴다.
   const emitPlain = (w, rawBody, wasListItem, overrideDepth, numberedBullet) => {
-    // 탭 하나의 너비를 4로 보고, 그 줄의 들여쓰기 깊이(탭 개수)만큼 표시를 고른다.
-    // 줄이 앞에서 몇 번째인지와 상관없이, 들여쓰기가 같으면 항상 같은 표시가 된다.
-    // (목록 줄은 overrideDepth가 대신 쓰인다 — 위 설명 참고.)
+    const sm = smmGetShadeInfo(rawBody);
+    const cleanBodyRaw = sm ? sm.cleanText : rawBody;
+    const shadeCls = sm ? (' smr-shade smr-shade-' + sm.color + sm.level) : '';
     const depth = overrideDepth != null ? overrideDepth : Math.floor(w / 4);
-    // 이 줄 자신이 성경구절인지는(표시를 붙일지 말지와 별개로) 항상 먼저 알아
-    // 둔다 — 뒤에서 이 줄에 성경구절 전용 글꼴/색(smr-verse)을 입히는 데도 쓴다.
-    const isVerse = smmIsVerseEditorLine(rawBody);
-    // wasListItem: 원래 "-"/"*" 등 진짜 목록 기호를 달고 있던 줄이다 — 몸말 줄과
-    // 똑같이 그 깊이의 표시를 쓰되, skipMark 조건만 예전 구분을 그대로 남겨 둔다
-    // (목록 줄의 성경구절은 깊이와 상관없이 표시를 생략, 몸말 줄의 성경구절은
-    // 깊이 0일 때만 생략).
+    const explicit = smmParseExplicitMarkLine(cleanBodyRaw);
+    const outlineM = (!explicit && depth === 0) ? smmParseOutlinePrefix(cleanBodyRaw) : null;
+    const cleanBody = explicit ? explicit.body : (outlineM ? outlineM.body : cleanBodyRaw);
+    const isVerse = smmIsVerseEditorLine(cleanBody);
     const skipMark = wasListItem ? isVerse : (depth === 0 && isVerse);
     let markSrc = '';
+    let isStrong = false;
+    const marks = smmGetLineMarks(cfg);
     if (!skipMark) {
       if (numberedBullet) {
-        // 번호 매김 목록은 깊이 표시 대신 항상 그 번호를 그대로 쓴다. 줄 맨 앞의
-        // 숫자+"."/")"는 옵시디언이 목록으로 오해할 수 있어 이스케이프한다.
         markSrc = numberedBullet.replace(/([.)])$/, '\\$1') + ' ';
       } else {
-        const markCh = SMR_LINE_MARKS[Math.min(depth, SMR_LINE_MARKS.length - 1)];
-        if (markCh === SMR_LINE_MARKS[0]) {
-          // 깊이 0 표시(✓)는 본문 글씨체가 얼마나 두껍든 상관없이 항상 도드라져
-          // 보이도록 굵게(smr-mark-strong, styles.css) 감싸서 낸다.
-          markSrc = '<span class="smr-mark-strong">' + markCh + '</span> ';
+        const markCh = explicit ? explicit.mark : (outlineM ? outlineM.mark : marks[Math.min(depth, marks.length - 1)]);
+        isStrong = (depth === 0) && smmIsStrongMark(markCh, cfg);
+        if (isStrong) {
+          const wideCls = smmIsWideMark(markCh) ? ' smm-mark-wide' : '';
+          markSrc = '<span class="smr-mark-strong' + wideCls + '">' + markCh + '</span> ';
         } else if (markCh === '-') {
-          // '-'는 줄 맨 앞에 오면 옵시디언이 목록으로 오해하므로 \\- 로 이스케이프해서
-          // 글자 그대로 "-"만 보이게 한다
           markSrc = '\\- ';
+        } else if (explicit) {
+          markSrc = '<span class="smr-mark-sub-icon">' + markCh + '</span> ';
         } else {
           markSrc = markCh + ' ';
         }
       }
     }
-    // 예전에는 공백(스페이스) 문자를 depth만큼 반복해서 들여쓰기를 흉내 냈는데,
-    // 문단(<p>) 안에서는 옵시디언도 다른 웹 문서와 마찬가지로 이어진 공백을
-    // 화면에 그릴 때 한 칸으로 뭉개 버려서, 실제로는 하위 단(깊은 줄)이 더
-    // 들여써지지 않는 문제가 있었다. 그래서 이제는 <span>으로 감싸고, "설교문
-    // 읽기 모드" 설정의 "목록 들여쓰기(글자 수)" 값(--smr-indent, styles.css의
-    // smr-vd0~smr-vd20 규칙)을 깊이만큼 곱한 왼쪽 여백을 줘서, 실제 목록(•)의
-    // 들여쓰기 설정과 똑같은 폭으로 하위 단도 확실히 들여써지게 한다.
-    // 성경구절 줄이면 smr-verse 표시도 여기서 이 줄 자신에게 바로 붙인다 — 예전엔
-    // 화면에 다 그려진 뒤에 문단(<p>) 전체의 글을 한데 이어 붙여서(줄바꿈으로
-    // 나뉜 성경구절+몸말 여러 줄이 한 문단에 섞여 있는 경우가 많음) 그 앞부분만
-    // 보고 성경구절인지 판단했다. 그래서 문단의 첫 줄이 성경구절이 아니면 그
-    // 뒤에 이어지는 진짜 성경구절 줄도 표시를 못 받고, 반대로 첫 줄이 성경구절
-    // 줄이면 뒤에 이어지는 몸말 줄까지 몽땅 성경구절 글꼴로 잘못 칠해지곤 했다.
-    // 이제는 줄 하나하나가 자기 글만 보고 스스로 판단하므로 이런 문제가 없다.
     const vd = Math.max(0, Math.min(depth, 20));
     const verseCls = isVerse ? ' smr-verse' : '';
-    // "(책 장:절)" 장절 표시는 설교문 읽기 모드에서도 배지로 강조해서 보여준다.
-    const displayBody = smmWrapVerseRefBadges(rawBody);
-    // ✓ 줄이면 글자 폰트/크기/색을 따로 맞출 수 있도록 smr-vline-strong을 단다(설정: 강대상 ✓ 줄 글자).
-    const strongLineCls = markSrc.indexOf('smr-mark-strong') >= 0 ? ' smr-vline-strong' : '';
-    // 표시(✓/ㆍ/-)와 글을 별개의 칸(smr-vmark-cell/smr-vtext-cell)으로 나누고
-    // styles.css에서 표(table) 레이아웃으로 배치한다 — 표의 "첫 칸 너비는 내용만큼,
-    // 둘째 칸은 나머지 전부"라는 원리를 그대로 쓰면, 표시가 ✓든 ㆍ든 -든(글꼴·크기가
-    // 얼마든) 그 폭을 굳이 em 단위로 추측해 맞출 필요 없이 항상 정확히 들어맞는다
-    // (문장이 길어 줄바꿈돼도 둘째 칸 안에서만 줄바꿈되므로 자동으로 글자 시작
-    // 위치에 맞음). "V는 자동 줄맞추기(내어쓰기)로" 요청 — 값을 추측해 맞추던
-    // 이전 방식(padding-left/text-indent)을 모든 표시 있는 줄에서 대체한다.
+    const displayBody = smmWrapVerseRefBadges(cleanBody);
+    const strongLineCls = ((depth === 0) && isStrong) ? ' smr-vline-strong' : '';
     const lineHtml = markSrc
-      ? '<span class="smr-vline smr-vd' + vd + verseCls + strongLineCls + '">' +
+      ? '<span class="smr-vline smr-vd' + vd + verseCls + strongLineCls + shadeCls + '">' +
         '<span class="smr-vmark-cell">' + markSrc + '</span>' +
         '<span class="smr-vtext-cell">' + displayBody + '</span></span>'
-      : '<span class="smr-vline smr-vd' + vd + verseCls + strongLineCls + '">' + displayBody + '</span>';
+      : '<span class="smr-vline smr-vd' + vd + verseCls + strongLineCls + shadeCls + '">' + displayBody + '</span>';
     if (prevKind === 'plain') {
       // 바로 앞 줄도 몸말 줄이었다면, 엔터로 나뉜 것이니 그대로 줄을 끊어 준다
       out[out.length - 1] = out[out.length - 1] + '  ';
@@ -6647,7 +10055,29 @@ function smrPreserveLineBreaks(md) {
     prevKind = 'plain';
   };
 
-  for (let i = 0; i < lines.length; i++) {
+  // 문서 맨 앞의 Frontmatter (--- ... --- 속성) 감지 및 전용 카드 박스 생성
+  let startIdx = 0;
+  if (lines.length > 0 && lines[0].trim() === '---') {
+    let endFm = -1;
+    for (let i = 1; i < lines.length; i++) {
+      if (lines[i].trim() === '---') {
+        endFm = i;
+        break;
+      }
+    }
+    if (endFm > 0) {
+      const fmLines = lines.slice(1, endFm);
+      const fmBoxHtml = smrBuildFrontmatterBox(fmLines);
+      if (fmBoxHtml) {
+        out.push(fmBoxHtml);
+        out.push('');
+        prevKind = 'headquote';
+      }
+      startIdx = endFm + 1;
+    }
+  }
+
+  for (let i = startIdx; i < lines.length; i++) {
     const line = lines[i];
 
     const fm = line.match(/^\s*([`~]{3,})/);
@@ -6672,18 +10102,46 @@ function smrPreserveLineBreaks(md) {
     // 제목/인용/표로 알아본다(가운데 글자만 <span>으로 감싸는 것이라 지장 없음).
     // 들여쓴 인용(예: 목록 밑에 탭으로 들여써 붙인 "\t> (욥 1:6-7) …")은 앞 공백을
     // 떼고 들여쓰지 않은 인용과 똑같이 낸다. 그대로 두면 마크다운이 앞 줄 문단의
-    // "이어지는 글"로 붙여 버리거나(탭 4칸 이상은 인용으로 못 끼어듦) 코드블록으로
-    // 오해해서, ">"가 글자 그대로 남고 인용 모양(왼쪽 선·들여쓰기)이 안 나왔다
-    // ("들여쓰기 하고 > 인용하면 들여쓰기 안 했을 때와 동일하게" 요청).
-    const indentedQuoteM = line.match(/^[ \t]+(>.*)$/);
-    const effLine = indentedQuoteM ? indentedQuoteM[1] : line;
-    const isHeadQuoteTable = /^\s{0,3}(#{1,6}\s|>|\|)/.test(effLine) || (i === 0 && line.trim() === '---');
+    // 들여쓴 인용(예: 목록 밑에 탭으로 들여써 붙인 "\t> (욥 1:6-7) …")은 앞 공백을
+    // 떼고 목록 깊이(smr-qdN)를 부여해 마크다운 인용문으로 처리한다.
+    // 이전에는 마크다운 렌더러에 넘기기 전에 성경구절 배지(<span class="smm-verse-ref">)를
+    // 직접 감싸서 넘겼으나, 옵시디언 렌더러가 인용문 맨 앞의 raw HTML span을 신뢰하지
+    // 않고 코드 문자열로 찍어버려 화면에 태그가 노출되는 문제가 있었다.
+    // 이제는 깨끗한 마크다운 인용문으로 넘긴 뒤 applyStyle 후처리에서 안전하게 배지를 입힌다.
+    const indentedQuoteM = line.match(/^([ \t]+)(>.*)$/);
+    if (indentedQuoteM) {
+      if (prevKind === 'plain' || prevKind === 'list' || prevKind === 'headquote') out.push('');
+      const qDepth = Math.max(1, Math.min(Math.floor(widthOfWs(indentedQuoteM[1]) / 4), 20));
+      const qLine = indentedQuoteM[2].replace(/^>[ \t]?/, (m) =>
+        qDepth > 0 ? '> <span class="smr-qd smr-qd' + qDepth + '"></span>' : m);
+      out.push(qLine);
+      prevKind = 'headquote';
+      continue;
+    }
+
+    if (/^\s{0,3}>/.test(line)) {
+      if (prevKind === 'plain' || prevKind === 'list') out.push('');
+      out.push(line);
+      prevKind = 'headquote';
+      continue;
+    }
+
+    const isHeadQuoteTable = /^\s{0,3}(#{1,6}\s|\|)/.test(line) || (i === 0 && line.trim() === '---');
     if (isHeadQuoteTable) {
-      out.push(smmWrapVerseRefBadges(effLine));
+      let headLine = line;
+      if (/^\s{0,3}#{1,6}\s/.test(line)) {
+        const sm = smmGetShadeInfo(line);
+        if (sm) {
+          headLine = line.replace(SMM_SHADE_RE, '').replace(/^(\s{0,3}#{1,6}\s+)(.*)$/, (all, prefix, content) => {
+            return `${prefix}<span class="smr-h-shade smr-shade-${sm.color}${sm.level}" style="display:none"></span>${content}`;
+          });
+        }
+      }
+      out.push(smmWrapVerseRefBadges(headLine));
       prevKind = 'headquote';
       // 제목(#) 바로 아래에 둔 빈 줄은 편집 화면처럼 한 줄 띄우기로 보여 준다 — 마크다운은 빈 줄을
       // 문단 구분으로만 보고 따로 간격을 주지 않아서, 예전에는 빈 줄을 넣어도 제목에 글이 바짝 붙어 보였다.
-      if (/^\s{0,3}#{1,6}\s/.test(effLine)) {
+      if (/^\s{0,3}#{1,6}\s/.test(line)) {
         let k = i + 1;
         let blanks = 0;
         while (k < lines.length && lines[k].trim() === '') { blanks++; k++; }
@@ -6721,7 +10179,7 @@ function smrPreserveLineBreaks(md) {
       const qInfo = listLineInfo.get(i);
       // 목록 기호(-, *)를 달고 쓴 인용은 문서 구조상 깊이가 0이어도(빈 줄 뒤 첫 목록 등) 최소 한 단계는 들여쓴다
       const qDepth = Math.max(1, Math.min(qInfo ? qInfo.depth : Math.floor(widthOfWs(listM[1]) / 4), 20));
-      const qLine = smmWrapVerseRefBadges(listM[3]).replace(/^>[ \t]?/, (m) =>
+      const qLine = listM[3].replace(/^>[ \t]?/, (m) =>
         qDepth > 0 ? '> <span class="smr-qd smr-qd' + qDepth + '"></span>' : m);
       out.push(qLine);
       prevKind = 'headquote';
@@ -6736,7 +10194,10 @@ function smrPreserveLineBreaks(md) {
       continue;
     }
 
-    emitPlain(indentWidthOf(line), stripLeading(line));
+    const wPlain = indentWidthOf(line);
+    const infoPlain = listLineInfo.get(i);
+    const depthPlain = Math.max(infoPlain ? infoPlain.depth : 0, Math.floor(wPlain / 4));
+    emitPlain(wPlain, stripLeading(line), false, depthPlain);
   }
   return out.join('\n');
 }
@@ -6764,17 +10225,18 @@ function smmNodeDepth(node) {
  *  목록 항목은 깊이와 상관없이 항상 그 번호를 그대로 쓴다(ㆍ/-로 뭉뚱그리면 순서가
  *  안 보이므로) — 반환값은 이스케이프 전의 "생 표시 글자"이며, 실제로 줄 맨 앞에
  *  낼 때는 호출하는 쪽에서 '-'나 "1." 등을 이스케이프해야 한다. */
-function smmListNodeMarkChar(node) {
+function smmListNodeMarkChar(node, cfg) {
   if (node && node.kind === 'list' && /^\d+[.)]$/.test(node.bullet || '')) return node.bullet;
   const depth = smmNodeDepth(node);
-  return SMR_LINE_MARKS[Math.min(depth, SMR_LINE_MARKS.length - 1)];
+  const marks = smmGetLineMarks(cfg);
+  return marks[Math.min(depth, marks.length - 1)];
 }
 
-/** parseDoc으로 문서 구조를 한 번 분석해서, 목록(list) 줄 하나하나가 받을 "구조적
- *  깊이"(smmNodeDepth)와 번호 매김 목록이면 그 번호를 0-based 줄 번호로 찾아볼 수
+/** parseDoc으로 문서 구조를 한 번 분석해서, 목록(list) 및 본문(body) 줄 하나하나가 받을
+ *  "구조적 깊이"(smmNodeDepth)와 번호 매김 목록이면 그 번호를 0-based 줄 번호로 찾아볼 수
  *  있는 Map으로 돌려준다. 설교문 미리보기(smrPreserveLineBreaks)·편집 화면
  *  (smmClassifyLineMarks)이 마인드맵·워드 내보내기와 항상 같은 표시를 보여주도록,
- *  네 곳 모두 결국 이 구조(parseDoc의 진짜 목록 중첩)를 기준으로 삼는다. */
+ *  네 곳 모두 결국 이 구조(parseDoc의 진짜 목록/본문 중첩)를 기준으로 삼는다. */
 function smmComputeListLineInfo(text) {
   const doc = parseDoc(text);
   const info = new Map(); // 0-based 줄 번호 -> { depth, numberedBullet }
@@ -6782,6 +10244,12 @@ function smmComputeListLineInfo(text) {
     if (node.kind === 'list') {
       const isNumbered = /^\d+[.)]$/.test(node.bullet || '');
       info.set(node.line, { depth: smmNodeDepth(node), numberedBullet: isNumbered ? node.bullet : null });
+    } else if (node.kind === 'body') {
+      const baseDepth = Math.max(smmNodeDepth(node), Math.floor(indentWidth(node.bodyIndent || '') / 4));
+      const end = node.endLine != null ? node.endLine : node.line;
+      for (let ln = node.line; ln <= end; ln++) {
+        info.set(ln, { depth: baseDepth, numberedBullet: null });
+      }
     }
     (node.children || []).forEach(visit);
   };
@@ -6790,19 +10258,21 @@ function smmComputeListLineInfo(text) {
 }
 
 /** 마인드맵 캔버스의 "본문(body)" 노드 하나(node.text, 여러 줄일 수 있음)에도
- *  설교문 미리보기·편집 화면과 똑같은 깊이 표시(✓/-)를 붙인다. body 노드의 글은
+ *  설교문 미리보기·편집 화면과 똑같은 깊이 표시(✓/ㆍ/-)를 붙인다. body 노드의 글은
  *  이미 제목·목록이 섞이지 않은 순수 몸말 줄들만 모여 있으므로(parseDoc 참고),
  *  smrPreserveLineBreaks처럼 문서 전체를 훑을 필요 없이 줄마다 바로 판단하면 된다.
  *  결과는 MarkdownRenderer.render()에 그대로 넘길 수 있는 마크다운 소스 문자열이다
  *  (smr-vline 대신 smm-node- 접두사를 써서, 마인드맵 노드 전용 CSS로 따로 꾸민다). */
-function smmMarkNodeBodyLines(text) {
+function smmMarkNodeBodyLines(text, baseDepth = 0, cfg) {
   const lines = String(text == null ? '' : text).split('\n');
   const out = [];
   let prevKind = null; // 'plain' | 'quote' | null(문단 경계 — 빈 줄 등)
+  const marks = smmGetLineMarks(cfg);
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const ws = (raw.match(/^[ \t]*/) || [''])[0];
-    const depth = Math.floor(indentWidth(ws) / 4);
+    const relDepth = Math.floor(indentWidth(ws) / 4);
+    const depth = baseDepth + relDepth;
     const rawBody = raw.slice(ws.length);
 
     if (rawBody.trim() === '') {
@@ -6825,14 +10295,19 @@ function smmMarkNodeBodyLines(text) {
       continue;
     }
 
-    const isVerse = smmIsVerseEditorLine(rawBody);
+    const explicit = smmParseExplicitMarkLine(rawBody);
+    const outlineM = (!explicit && depth === 0) ? smmParseOutlinePrefix(rawBody) : null;
+    const bodyText = explicit ? explicit.body : (outlineM ? outlineM.body : rawBody);
+    const isVerse = smmIsVerseEditorLine(bodyText);
     const skipMark = depth === 0 && isVerse;
     let markSrc = '';
     let isStrongMark = false;
     if (!skipMark) {
-      const markCh = SMR_LINE_MARKS[Math.min(depth, SMR_LINE_MARKS.length - 1)];
-      if (markCh === SMR_LINE_MARKS[0]) {
-        markSrc = '<span class="smm-node-mark-strong">' + markCh + '</span> ';
+      const markCh = explicit ? explicit.mark : (outlineM ? outlineM.mark : marks[Math.min(depth, marks.length - 1)]);
+      const isStrong = (depth === 0) && smmIsStrongMark(markCh, cfg);
+      if (isStrong) {
+        const wideCls = smmIsWideMark(markCh) ? ' smm-mark-wide' : '';
+        markSrc = '<span class="smm-node-mark-strong' + wideCls + '">' + markCh + '</span> ';
         isStrongMark = true;
       } else if (markCh === '-') {
         // 줄 맨 앞의 '-'는 옵시디언이 목록으로 오해할 수 있어 이스케이프한다
@@ -6841,9 +10316,9 @@ function smmMarkNodeBodyLines(text) {
         markSrc = markCh + ' ';
       }
     }
-    const vd = Math.max(0, Math.min(depth, 8));
+    const vd = Math.max(0, Math.min(relDepth, 8));
     // "(책 장:절)" 장절 표시는 마인드맵 노드 안에서도 배지로 강조해서 보여준다.
-    const displayBody = smmWrapVerseRefBadges(rawBody);
+    const displayBody = smmWrapVerseRefBadges(bodyText);
     // ✓ 표시가 붙은 줄은, 뒤따르는 문장까지 다크 모드에서 옅은 노란빛으로 눈에
     // 띄게 하기 위한 표시(smm-node-vline-strong)를 하나 더 단다.
     const strongCls = isStrongMark ? ' smm-node-vline-strong' : '';
@@ -6913,10 +10388,10 @@ function smmFindItemIndexForLine(md, lineIdx, repEls) {
  *  돌아갈 때, 방금 읽기모드에서 보고 있던 그 줄로 커서를 옮겨 주기 위해 쓴다. */
 function smmFindLineForItemText(md, itemText) {
   let t = String(itemText == null ? '' : itemText);
-  // 우리가 줄 앞에 붙인 ✓/- 표시(글자 하나 + 공백)는 원문에 없으므로 떼어낸다
+  // 우리가 줄 앞에 붙인 ✓/ㆍ/- 표시(글자 하나 + 공백)와 번호 매김은 원문에 없거나 기호이므로 떼어낸다
   // ('•'는 예전에 강등된 목록 줄에 쓰던 표시 — 지금은 안 쓰지만, 예전에 저장된
   // 글에는 남아 있을 수 있어 계속 같이 떼어낸다)
-  t = t.replace(/^[ \t]*(?:✓|-|•)[ \t]+/, '');
+  t = t.replace(/^[ \t]*(?:✓|ㆍ|-|•|●|◆|■|▶|★|※|◎|\d+[.)])[ \t]+/, '');
   t = t.replace(/ /g, ' ').replace(/\s+/g, ' ').trim();
   if (!t) return null;
   const needle = t.slice(0, 14);
@@ -7084,8 +10559,8 @@ function smrStyleVars(s) {
       ? smmFontStack(s.rdMarkLineFont, 'rdmarkline')
       : 'var(--smr-font-body)',
     '--smr-size-body': body + 'px',
-    '--smr-line': String(n(s.rdLineHeight, 1.75)),
-    '--smr-para-gap': n(s.rdParaGap, 0.7) + 'em',
+    '--smr-line': String(n(s.edLineHeight || s.rdLineHeight, 1.75)),
+    '--smr-para-gap': (n(s.rdParaGap, 0.7) + 'em'),
     // 0 도 뜻이 있으므로(들여쓰기 없음) smmNumOr 대신 직접 판단한다
     '--smr-indent': (function () {
       const v = Number(s.rdIndent);
@@ -7102,9 +10577,29 @@ function smrStyleVars(s) {
   // (styles.css 의 .smr-root.smr-light/.smr-dark 값에 기대지 않음) 미리보기·마인드맵·편집 화면·워드가 같은 색을 쓴다.
   const rdDark = smrResolveTheme(s.rdTheme) === '어둡게';
   for (let i = 1; i <= 6; i++) {
-    const own = String(s[(rdDark ? 'rdColorDarkH' : 'rdColorH') + i] || '').replace(/^#/, '').trim();
+    let own = '';
+    if (s.rdSyncHeadColor) {
+      own = String(s[(rdDark ? 'edColorDarkH' : 'edColorH') + i] || '').replace(/^#/, '').trim();
+    }
+    if (!own) {
+      own = String(s[(rdDark ? 'rdColorDarkH' : 'rdColorH') + i] || '').replace(/^#/, '').trim();
+    }
     const def = (rdDark ? M_COLOR_H_DARK : M_COLOR_H_LIGHT)[i - 1];
     out['--smr-h' + i] = '#' + (/^[0-9A-Fa-f]{6}$/.test(own) ? own : def);
+  }
+  // 성경구절/인용 색상 동기화
+  if (s.rdSyncVerseColor) {
+    let vSync = String(s[rdDark ? 'edColorDarkVerse' : 'edColorVerse'] || '').replace(/^#/, '').trim();
+    if (/^[0-9A-Fa-f]{6}$/.test(vSync)) {
+      out['--smr-verse'] = '#' + vSync;
+    } else {
+      out['--smr-verse'] = 'var(--smr-text)';
+    }
+
+    let qSync = String(s[rdDark ? 'edColorDarkQuote' : 'edColorQuote'] || '').replace(/^#/, '').trim();
+    if (/^[0-9A-Fa-f]{6}$/.test(qSync)) {
+      out['--smr-quote'] = '#' + qSync;
+    }
   }
   return out;
 }
@@ -7597,8 +11092,9 @@ class SmrInk {
   }
   /** 화면 좌표 → 층 좌표 */
   toLayer(x, y) {
-    const fr = this.view.flowEl.getBoundingClientRect();
-    return [x - fr.left, y - fr.top];
+    const f = this.view.flowEl;
+    const fr = f.getBoundingClientRect();
+    return [x - fr.left + (f.scrollLeft || 0), y - fr.top + (f.scrollTop || 0)];
   }
   render() {
     if (!this.layer || !this.layer.parentNode || !this.data) return;
@@ -7740,7 +11236,7 @@ class SmrInk {
   }
   /** 지금 보고 있는 장에서 (x, y)에 가장 가까운 글자(글자 사이 빈 곳을 눌렀을 때) */
   nearestOnPage(idx, x, y) {
-    const page = this.view.flowEl.children[this.view.page];
+    const page = this.curPage();
     if (!page) return -1;
     let best = -1, bestD = Infinity;
     for (const info of idx.infos) {
@@ -7928,9 +11424,13 @@ class SermonReaderView extends TextFileView {
     this.pages = 1;
     this.step = 0;
     this._laying = false;
+    this._rendering = false;
     // 편집모드에서 커서가 있던 줄을 이어받아, 열리자마자 1쪽이 아니라
     // 그 줄이 있는 쪽으로 바로 넘어가게 함(layout()에서 소비하고 비움)
     this.focusLineOnLoad = null;
+    this.initialFocusPos = null;
+    this.initialFocusPage = null;
+    this.initialFocusScrollTop = null;
   }
 
   getViewType() { return VIEW_TYPE_READ; }
@@ -7946,12 +11446,21 @@ class SermonReaderView extends TextFileView {
     this.page = 0;
     // 편집모드에서 넘어올 때 남겨 둔 커서 줄 정보가 있으면 이어받는다
     // (main.js의 toggleReader()에서 소비되기 전에 심어 둠)
-    if (this.plugin && this.plugin.pendingReaderFocusLine != null) {
+    if (this.plugin && this.plugin.pendingReaderFocusPos != null) {
+      this.initialFocusPos = this.plugin.pendingReaderFocusPos;
+      this.focusLineOnLoad = this.initialFocusPos.line;
+      this.plugin.pendingReaderFocusPos = null;
+      this.plugin.pendingReaderFocusLine = null;
+    } else if (this.plugin && this.plugin.pendingReaderFocusLine != null) {
       this.focusLineOnLoad = this.plugin.pendingReaderFocusLine;
+      this.initialFocusPos = { line: this.focusLineOnLoad, ch: null };
       this.plugin.pendingReaderFocusLine = null;
     } else {
       this.focusLineOnLoad = null;
+      this.initialFocusPos = null;
     }
+    this.initialFocusPage = null;
+    this.initialFocusScrollTop = null;
     this.renderDoc();
   }
 
@@ -8068,11 +11577,12 @@ class SermonReaderView extends TextFileView {
       this._drawerAllow = !(this.rootEl && this.rootEl.contains(e.target));
     }, true);
 
-    const startSwipe = (x, y) => { if (inkBusy()) { tracking = false; return; } tracking = true; sx = x; sy = y; };
+    const isScrollMode = () => !!(this.plugin && this.plugin.settings && this.plugin.settings.rdScroll);
+    const startSwipe = (x, y) => { if (isScrollMode() || inkBusy()) { tracking = false; return; } tracking = true; sx = x; sy = y; };
     const endSwipe = (x, y) => {
       if (!tracking) return;
       tracking = false;
-      if (inkBusy()) return;
+      if (isScrollMode() || inkBusy()) return;
       const dx = x - sx;
       const dy = y - sy;
       // 가로로 충분히, 그리고 세로보다 더 많이 움직였을 때만 넘긴다
@@ -8111,19 +11621,40 @@ class SermonReaderView extends TextFileView {
     // ---- 키보드(데스크탑·페이지터너) ----
     this.registerDomEvent(this.rootEl, 'keydown', (e) => {
       const k = e.key;
+      if (k === 'Escape') {
+        // Esc를 누르면 읽기 모드를 풀고 원래 설교문(마크다운) 화면으로 돌아간다.
+        // 최상단이 아니라, 방금 읽고 있던 그 줄로 커서를 옮겨서 이어서 편집할 수
+        // 있게 한다.
+        e.preventDefault();
+        this.plugin.switchToMarkdown(this.leaf, this.getCurrentTopLine());
+        return;
+      }
+      if (isScrollMode() && this.flowEl) {
+        const s = this.plugin.settings || {};
+        const behavior = s.rdAnim === false ? 'auto' : 'smooth';
+        const lineStep = Math.max(60, Math.round(this.flowEl.clientHeight * 0.16));
+        const pageStep = Math.max(120, Math.round(this.flowEl.clientHeight * 0.82));
+        if (k === 'ArrowDown') {
+          e.preventDefault(); this.flowEl.scrollBy({ top: lineStep, behavior });
+        } else if (k === 'ArrowUp') {
+          e.preventDefault(); this.flowEl.scrollBy({ top: -lineStep, behavior });
+        } else if (k === 'PageDown' || k === ' ' || k === 'ArrowRight') {
+          e.preventDefault(); this.flowEl.scrollBy({ top: pageStep, behavior });
+        } else if (k === 'PageUp' || k === 'ArrowLeft') {
+          e.preventDefault(); this.flowEl.scrollBy({ top: -pageStep, behavior });
+        } else if (k === 'Home') {
+          e.preventDefault(); this.flowEl.scrollTo({ top: 0, behavior });
+        } else if (k === 'End') {
+          e.preventDefault(); this.flowEl.scrollTo({ top: this.flowEl.scrollHeight, behavior });
+        }
+        return;
+      }
       if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown' || k === ' ') {
         e.preventDefault(); this.go(1);
       } else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp') {
         e.preventDefault(); this.go(-1);
       } else if (k === 'Home') { e.preventDefault(); this.goTo(0); }
       else if (k === 'End') { e.preventDefault(); this.goTo(this.pages - 1); }
-      else if (k === 'Escape') {
-        // Esc를 누르면 읽기 모드를 풀고 원래 설교문(마크다운) 화면으로 돌아간다.
-        // 최상단이 아니라, 방금 읽고 있던 그 줄로 커서를 옮겨서 이어서 편집할 수
-        // 있게 한다.
-        e.preventDefault();
-        this.plugin.switchToMarkdown(this.leaf, this.getCurrentTopLine());
-      }
     });
 
     // ---- 창 크기가 바뀌면 장을 다시 나눈다 ----
@@ -8155,6 +11686,8 @@ class SermonReaderView extends TextFileView {
     // 밝게/어둡게 기본색으로 안 돌아가는 일이 없도록, 다시 계산하기 전에 먼저 지운다
     // — smrStyleVars는 색이 지정된 단계만 --smr-h1~6를 돌려주기 때문.
     for (let i = 1; i <= 6; i++) this.rootEl.style.removeProperty('--smr-h' + i);
+    this.rootEl.style.removeProperty('--smr-verse');
+    this.rootEl.style.removeProperty('--smr-quote');
     const vars = smrStyleVars(s);
     for (const k of Object.keys(vars)) this.rootEl.style.setProperty(k, vars[k]);
     // 아이패드 등에서 "글꼴이름 + 굵기" 이름이 안 잡히는 경우 가족 이름 + 굵기로 보정
@@ -8163,86 +11696,115 @@ class SermonReaderView extends TextFileView {
     this.rootEl.classList.toggle('smr-light', mode === '밝게');
     this.rootEl.classList.toggle('smr-dark', mode === '어둡게');
     this.rootEl.classList.toggle('smr-no-anim', s.rdAnim === false);
-    this.barEl.style.display = s.rdShowPage === false ? 'none' : '';
+    this.rootEl.classList.toggle('smr-scroll-mode', !!s.rdScroll);
+    this.barEl.style.display = (s.rdScroll || s.rdShowPage === false) ? 'none' : '';
   }
 
   /** 설정이 바뀌었을 때 다시 그리기 */
   refresh() {
+    const s = this.plugin.settings || {};
+    const scrollMode = !!s.rdScroll;
+    if (this._lastScrollMode !== undefined && this._lastScrollMode !== scrollMode) {
+      this._lastScrollMode = scrollMode;
+      this.renderDoc();
+      return;
+    }
+    this._lastScrollMode = scrollMode;
     this.applyStyle();
     this.layout(true);
   }
 
   async renderDoc() {
     if (!this.flowEl) return;
-    this.flowEl.empty();
-    const path = this.file ? this.file.path : '';
-    // this.md(원문)는 그대로 두고, 화면에 그릴 때만 ==강조== 공백을 다듬고
-    // 엔터로 나눈 줄바꿈·들여쓰기를 그대로 흉내 낸 사본을 쓴다
-    const srcForRender = smrPreserveLineBreaks(smrTidyHighlightSpacing(this.md));
-    // 그리는 동안은 편집/읽기 화면용 후처리(성경구절 글꼴·✓ 줄 class 칠하기)가 끼어들지
-    // 않게 표시해 둔다(registerMarkdownPostProcessor 쪽에서 이 값을 보고 건너뜀).
-    this.plugin._smrRenderDepth = (this.plugin._smrRenderDepth || 0) + 1;
+    this._rendering = true;
     try {
-      await MarkdownRenderer.render(this.app, srcForRender, this.flowEl, path, this);
-    } catch (e) {
-      try { await MarkdownRenderer.renderMarkdown(srcForRender, this.flowEl, path, this); }
-      catch (e2) { this.flowEl.setText(this.md); }
+      this._lastScrollMode = !!(this.plugin.settings && this.plugin.settings.rdScroll);
+      this.flowEl.empty();
+      const path = this.file ? this.file.path : '';
+      // this.md(원문)는 그대로 두고, 화면에 그릴 때만 ==강조== 공백을 다듬고
+      // 엔터로 나눈 줄바꿈·들여쓰기를 그대로 흉내 낸 사본을 쓴다
+      const srcForRender = smrPreserveLineBreaks(smrTidyHighlightSpacing(this.md), this.plugin.settings);
+      // 그리는 동안은 편집/읽기 화면용 후처리(성경구절 글꼴·✓ 줄 class 칠하기)가 끼어들지
+      // 않게 표시해 둔다(registerMarkdownPostProcessor 쪽에서 이 값을 보고 건너뜀).
+      this.plugin._smrRenderDepth = (this.plugin._smrRenderDepth || 0) + 1;
+      try {
+        await MarkdownRenderer.render(this.app, srcForRender, this.flowEl, path, this);
+      } catch (e) {
+        try { await MarkdownRenderer.renderMarkdown(srcForRender, this.flowEl, path, this); }
+        catch (e2) { this.flowEl.setText(this.md); }
+      } finally {
+        this.plugin._smrRenderDepth = Math.max(0, (this.plugin._smrRenderDepth || 1) - 1);
+      }
+      // 제목 음영 클래스 적용 (smr-h-shade 마커를 감싸는 h1..h6에 smr-shade 클래스 주입)
+      try {
+        for (const span of Array.from(this.flowEl.querySelectorAll('.smr-h-shade'))) {
+          const h = span.closest('h1, h2, h3, h4, h5, h6');
+          if (h) {
+            const shadeCls = Array.from(span.classList).find((c) => c.startsWith('smr-shade-'));
+            if (shadeCls) h.classList.add('smr-shade', shadeCls);
+          }
+        }
+      } catch (e) { /* 무시 */ }
+      // 옛 옵시디언(아이패드 등)이 이모지 글자로 그린 색 강조를 색으로 바로잡는다
+      try { smmFixColorMarks(this.flowEl); } catch (e) { /* 무시 */ }
+      try { smmFixIndentedReadingQuotes(this.flowEl); } catch (e) { /* 무시 */ }
+      try { smmPaintReadingVerseRefs(this.flowEl); } catch (e) { /* 무시 */ }
+      try { smmPaintReadingBrackets(this.flowEl); } catch (e) { /* 무시 */ }
+      try { smmFixReadingHighlightSpacing(this.flowEl); } catch (e) { /* 무시 */ }
+      // 혹시라도 편집/읽기 화면용 표시가 붙었으면 떼어 낸다(강대상 설정이 그대로 먹게)
+      try {
+        for (const el of Array.from(this.flowEl.querySelectorAll('.smm-ed-vline-strong, .smm-ed-verse, .smm-rv-body, .smm-rv-body-strong, .smm-rv-strong'))) {
+          el.classList.remove('smm-ed-vline-strong', 'smm-ed-verse', 'smm-rv-body', 'smm-rv-body-strong', 'smm-rv-strong');
+        }
+        for (const el of Array.from(this.flowEl.querySelectorAll('p[style], li[style]'))) {
+          el.style.removeProperty('font-family');
+          el.style.removeProperty('font-size');
+        }
+      } catch (e) { /* 무시 */ }
+      // 렌더러가 남기는 빈 줄(줄바꿈 텍스트)을 없애 장 나누기가 어긋나지 않게 함
+      try { smmStripLayoutWhitespace(this.flowEl); } catch (e) { /* 무시 */ }
+      // 성경구절 문단(또는 항목)에 표시를 달아 전용 글꼴이 입혀지게 함.
+      // 단, 목록 기호 없이 탭 깊이만 있는 몸말 줄(.smr-vline)은 smrPreserveLineBreaks가
+      // 줄 하나하나에 이미 smr-verse를 직접 달아 줬으므로 여기서는 건드리지 않는다 —
+      // 그 줄들은 엔터로 나뉘어도 한 문단(<p>) 안에 여러 줄이 섞여 있어서, 문단 전체의
+      // 글을 이어 붙여 놓고 판단하면(예전 방식) 문단의 첫 줄만 보고 성경구절 여부를
+      // 정해 버려 뒤섞인 줄들이 틀리게 나온다(성경구절 줄이 표시를 못 받거나, 반대로
+      // 몸말 줄이 성경구절 글꼴로 잘못 칠해짐). 실제 목록(-, * 등) 항목은 이 표시
+      // 체계 밖이라 원래 방식(항목 전체를 보고 판단) 그대로 둔다.
+      try {
+        const els = this.flowEl.querySelectorAll('p, li');
+        for (let i = 0; i < els.length; i++) {
+          const el = els[i];
+          if (el.closest('blockquote')) continue;
+          if (el.querySelector('.smr-vline')) continue;
+          if (smmIsVerseEditorLine(smmOwnLineText(el))) el.classList.add('smr-verse');
+        }
+      } catch (e) { /* 무시 */ }
+      // 자기 글 없이 하위 목록만 들어 있는 항목은 글머리표를 지운다.
+      // (예: "- 1. 나실인" 은 바깥 항목이 비고 그 안에 번호 목록이 들어간다)
+      try {
+        const items = this.flowEl.querySelectorAll('li');
+        for (let i = 0; i < items.length; i++) {
+          const li = items[i];
+          const own = String(smmOwnLineText(li) || '').replace(/\s|\u00a0/g, '');
+          const first = li.firstElementChild;
+          const onlyList = !!first && (first.tagName === 'UL' || first.tagName === 'OL');
+          li.classList.toggle('smr-no-marker', own === '' && onlyList);
+        }
+      } catch (e) { /* 무시 */ }
+      // 맨 처음 화면(1쪽)에 노트 제목(파일 이름)을 "제목1"과 같은 크기로 보여준다.
+      try {
+        const title = this.file ? this.file.basename : '';
+        if (title && this.flowEl) {
+          const h1 = this.flowEl.createEl('h1', { cls: 'smr-doc-title', text: title });
+          this.flowEl.insertBefore(h1, this.flowEl.firstChild);
+        }
+      } catch (e) { /* 무시 */ }
+      // 이 설교문의 펜슬 필기를 불러 둔다(아이패드에서만; 다른 기기에선 아무것도 안 함)
+      try { if (this.ink) await this.ink.load(this.file); } catch (e) { /* 무시 */ }
     } finally {
-      this.plugin._smrRenderDepth = Math.max(0, (this.plugin._smrRenderDepth || 1) - 1);
+      this._rendering = false;
     }
-    // 옛 옵시디언(아이패드 등)이 이모지 글자로 그린 색 강조를 색으로 바로잡는다
-    try { smmFixColorMarks(this.flowEl); } catch (e) { /* 무시 */ }
-    // 혹시라도 편집/읽기 화면용 표시가 붙었으면 떼어 낸다(강대상 설정이 그대로 먹게)
-    try {
-      for (const el of Array.from(this.flowEl.querySelectorAll('.smm-ed-vline-strong, .smm-ed-verse, .smm-rv-body, .smm-rv-body-strong, .smm-rv-strong'))) {
-        el.classList.remove('smm-ed-vline-strong', 'smm-ed-verse', 'smm-rv-body', 'smm-rv-body-strong', 'smm-rv-strong');
-      }
-      for (const el of Array.from(this.flowEl.querySelectorAll('p[style], li[style]'))) {
-        el.style.removeProperty('font-family');
-        el.style.removeProperty('font-size');
-      }
-    } catch (e) { /* 무시 */ }
-    // 렌더러가 남기는 빈 줄(줄바꿈 텍스트)을 없애 장 나누기가 어긋나지 않게 함
-    try { smmStripLayoutWhitespace(this.flowEl); } catch (e) { /* 무시 */ }
-    // 성경구절 문단(또는 항목)에 표시를 달아 전용 글꼴이 입혀지게 함.
-    // 단, 목록 기호 없이 탭 깊이만 있는 몸말 줄(.smr-vline)은 smrPreserveLineBreaks가
-    // 줄 하나하나에 이미 smr-verse를 직접 달아 줬으므로 여기서는 건드리지 않는다 —
-    // 그 줄들은 엔터로 나뉘어도 한 문단(<p>) 안에 여러 줄이 섞여 있어서, 문단 전체의
-    // 글을 이어 붙여 놓고 판단하면(예전 방식) 문단의 첫 줄만 보고 성경구절 여부를
-    // 정해 버려 뒤섞인 줄들이 틀리게 나온다(성경구절 줄이 표시를 못 받거나, 반대로
-    // 몸말 줄이 성경구절 글꼴로 잘못 칠해짐). 실제 목록(-, * 등) 항목은 이 표시
-    // 체계 밖이라 원래 방식(항목 전체를 보고 판단) 그대로 둔다.
-    try {
-      const els = this.flowEl.querySelectorAll('p, li');
-      for (let i = 0; i < els.length; i++) {
-        const el = els[i];
-        if (el.closest('blockquote')) continue;
-        if (el.querySelector('.smr-vline')) continue;
-        if (smmIsVerseEditorLine(smmOwnLineText(el))) el.classList.add('smr-verse');
-      }
-    } catch (e) { /* 무시 */ }
-    // 자기 글 없이 하위 목록만 들어 있는 항목은 글머리표를 지운다.
-    // (예: "- 1. 나실인" 은 바깥 항목이 비고 그 안에 번호 목록이 들어간다)
-    try {
-      const items = this.flowEl.querySelectorAll('li');
-      for (let i = 0; i < items.length; i++) {
-        const li = items[i];
-        const own = String(smmOwnLineText(li) || '').replace(/\s|\u00a0/g, '');
-        const first = li.firstElementChild;
-        const onlyList = !!first && (first.tagName === 'UL' || first.tagName === 'OL');
-        li.classList.toggle('smr-no-marker', own === '' && onlyList);
-      }
-    } catch (e) { /* 무시 */ }
-    // 맨 처음 화면(1쪽)에 노트 제목(파일 이름)을 "제목1"과 같은 크기로 보여준다.
-    try {
-      const title = this.file ? this.file.basename : '';
-      if (title && this.flowEl) {
-        const h1 = this.flowEl.createEl('h1', { cls: 'smr-doc-title', text: title });
-        this.flowEl.insertBefore(h1, this.flowEl.firstChild);
-      }
-    } catch (e) { /* 무시 */ }
-    // 이 설교문의 펜슬 필기를 불러 둔다(아이패드에서만; 다른 기기에선 아무것도 안 함)
-    try { if (this.ink) await this.ink.load(this.file); } catch (e) { /* 무시 */ }
     this.applyStyle();
     this.layout(false);
   }
@@ -8264,12 +11826,13 @@ class SermonReaderView extends TextFileView {
    * 장 아니면 저 장, 둘 중 하나에만 온전히 들어가기 때문이다.
    */
   layout(keepPage) {
-    if (!this.clipEl || this._laying) return;
+    if (!this.clipEl || this._laying || this._rendering) return;
     this._laying = true;
     // 필기 층은 장 나누기 측정에 끼어들면 안 되므로 잠시 떼어 둔다(끝나면 다시 붙임)
     try { if (this.ink) this.ink.detach(); } catch (e) { /* 무시 */ }
     try {
       const s = this.plugin.settings || {};
+      const prevScrollTop = this.flowEl ? this.flowEl.scrollTop : 0;
       const pad = smmNumOr(s.rdMargin, 48);
       const maxW = smmNumOr(s.rdMaxWidth, 0);
       const gap = Math.max(24, Math.round(pad * 1.4));
@@ -8310,7 +11873,7 @@ class SermonReaderView extends TextFileView {
       // 실제 글이 들어갈 수 있는 공간은 이 여백만큼 줄어든다). 그래서 한
       // 장에 항목을 몇 개까지 담을지 정할 때도 이 여백만큼 뺀 높이를
       // 기준으로 삼아야 마지막 줄이 상자 아래로 살짝 넘치는 일이 없다.
-      const pageTopBuf = smmNumOr(s.rdSizeBody, 20) * smmNumOr(s.rdLineHeight, 1.5);
+      const pageTopBuf = smmNumOr(s.rdSizeBody, 20) * smmNumOr(s.edLineHeight || s.rdLineHeight, 1.5);
       const packH = Math.max(40, H - pageTopBuf);
 
       // 이전에 나눠 둔 장 상자(.smr-page)가 있으면, 안의 내용만 꺼내 원래대로
@@ -8324,10 +11887,10 @@ class SermonReaderView extends TextFileView {
         }
       }
 
-      // 이전 layout() 호출에서 목록을 장 경계에서 갈라놨을 수 있다(맨 바깥
-      // 목록 자체가 여러 장에 걸쳐 갈라진 경우 + 중첩된 하위 목록이 갈라진
-      // 경우 둘 다). 다시 잴 때는 그 나눴던 걸 먼저 원래 하나였던 모습으로
-      // 되돌려야, 창 크기가 바뀌어도 매번 정확히 처음부터 다시 나눌 수 있다.
+      // 이전 layout() 호출에서 문단(<p>)이나 목록을 장 경계에서 갈라놨을 수 있다.
+      // 다시 잴 때는 그 나눴던 걸 먼저 원래 하나였던 모습으로 되돌려야,
+      // 창 크기가 바뀌거나 글꼴 로딩 뒤 다시 나눌 때도 정확히 처음부터 나눌 수 있다.
+      topItems = smrDefragParagraphs(topItems);
       const merged = [];
       for (const el of topItems) {
         const prev = merged[merged.length - 1];
@@ -8386,15 +11949,30 @@ class SermonReaderView extends TextFileView {
       const flowRect = this.flowEl.getBoundingClientRect();
       const repEls = items.map((it) => (it.kind === 'atomic' ? it.el : it.leaf.ownEl));
 
-      // 편집모드에서 넘어오며 커서 줄을 이어받았으면(focusLineOnLoad), 그 줄
-      // 글자가 들어 있는 항목이 몇 번째인지 지금 찾아 둔다 — 장(페이지)을
-      // 나누기 전인 지금이라야 항목 순서(= repEls 순서)와 눈에 보이는 순서가
-      // 같아서 정확히 찾을 수 있다. 한 번 쓰면 바로 비워서, 그 다음(창 크기
-      // 변경 등으로 다시 나눌 때)에는 지금 보던 쪽을 그대로 유지하게 한다.
-      let focusItemIdx = null;
-      if (this.focusLineOnLoad != null) {
-        focusItemIdx = smmFindItemIndexForLine(this.md, this.focusLineOnLoad, repEls);
-        this.focusLineOnLoad = null;
+      const focusLine = this.focusLineOnLoad;
+      this.focusLineOnLoad = null;
+
+      if (s.rdScroll) {
+        const focusItemIdx = (focusLine != null)
+          ? smmFindItemIndexForLine(this.md, focusLine, repEls)
+          : null;
+        const targetTop = (focusItemIdx != null && repEls[focusItemIdx])
+          ? (repEls[focusItemIdx].getBoundingClientRect().top - flowRect.top)
+          : null;
+        this.flowEl.style.height = H + 'px';
+        this.step = W;
+        this.pages = 1;
+        this.page = 0;
+        this.updateBar();
+        if (targetTop != null) {
+          this.flowEl.scrollTop = Math.max(0, targetTop - Math.round(pad * 0.5));
+          this.initialFocusScrollTop = this.flowEl.scrollTop;
+        } else if (keepPage) {
+          this.flowEl.scrollTop = prevScrollTop;
+        } else {
+          this.flowEl.scrollTop = 0;
+        }
+        return;
       }
 
       const tops = repEls.map((el) => el.getBoundingClientRect().top - flowRect.top);
@@ -8438,7 +12016,9 @@ class SermonReaderView extends TextFileView {
           const headH = trySplitP(i, packH - curH, h);
           if (headH !== false) {
             cur.push(i);
-            curH += headH;
+            groups.push(cur);
+            cur = [];
+            curH = 0;
             continue;
           }
           if (cur.length) {
@@ -8452,7 +12032,9 @@ class SermonReaderView extends TextFileView {
               const headH2 = trySplitP(i, packH, h);
               if (headH2 !== false) {
                 cur.push(i);
-                curH += headH2;
+                groups.push(cur);
+                cur = [];
+                curH = 0;
                 continue;
               }
             }
@@ -8462,6 +12044,16 @@ class SermonReaderView extends TextFileView {
         curH += h;
       }
       if (cur.length || !groups.length) groups.push(cur);
+
+      // 편집모드에서 넘어오며 커서 줄을 이어받았으면(focusLine), 문단 쪼개기(trySplitP)까지
+      // 모두 끝나 items 순서가 확정된 지금 시점에 그 줄 글자가 들어 있는 항목이 몇 번째인지 찾는다 —
+      // 쪼개기 전에 먼저 인덱스를 구해 두면 앞쪽 문단이 잘려 items.splice가 일어날 때마다
+      // 뒤쪽 항목 인덱스가 밀려 엉뚱한 앞쪽 페이지가 열리는 문제가 있었기 때문.
+      let focusItemIdx = null;
+      if (focusLine != null) {
+        const finalRepEls = items.map((it) => (it.kind === 'atomic' ? it.el : it.leaf.ownEl));
+        focusItemIdx = smmFindItemIndexForLine(this.md, focusLine, finalRepEls);
+      }
 
       // 목록 항목의 하위 목록은 다음 항목들(items의 바로 다음 자리들)로
       // 뒤이어 오므로, 페이지를 새로 짓기 전에 각 li에서 하위 목록을
@@ -8570,6 +12162,7 @@ class SermonReaderView extends TextFileView {
         for (let gi = 0; gi < groups.length; gi++) {
           if (groups[gi].indexOf(focusItemIdx) !== -1) { want = gi; break; }
         }
+        this.initialFocusPage = Math.min(want, this.pages - 1);
       }
       this.goTo(Math.min(want, this.pages - 1), true);
     } finally {
@@ -8612,18 +12205,42 @@ class SermonReaderView extends TextFileView {
 
   /** 지금 보고 있는 쪽(페이지)의 맨 처음 줄이 원문(this.md)에서 몇 번째 줄인지
    *  찾는다. Esc(또는 다시 누르기)로 편집모드로 돌아갈 때, 방금 읽던 위치
-   *  그대로 커서를 옮겨 주기 위해 main.js의 switchToMarkdown()에서 쓴다. */
+   *  그대로 커서를 옮겨 주기 위해 main.js의 switchToMarkdown()에서 쓴다.
+   *  단, 처음 편집모드에서 넘어올 때 열렸던 바로 그 쪽(initialFocusPage)에서
+   *  그대로 돌아가는 경우에는, 페이지 맨 윗줄이 아니라 원래 커서가 있던 정확한
+   *  자리({ line, ch }, 예: '# 결론' 옆)를 그대로 돌려준다. */
   getCurrentTopLine() {
     try {
-      if (!this.flowEl) return null;
+      if (!this.flowEl) return this.initialFocusPos || null;
+      const selector = '.smr-vline, li, h1:not(.smr-doc-title), h2, h3, h4, h5, h6, blockquote, table';
+      if (this.plugin && this.plugin.settings && this.plugin.settings.rdScroll) {
+        if (this.initialFocusPos != null && this.initialFocusScrollTop != null &&
+            Math.abs(this.flowEl.scrollTop - this.initialFocusScrollTop) < 20) {
+          return this.initialFocusPos;
+        }
+        const viewTop = this.flowEl.getBoundingClientRect().top;
+        const els = this.flowEl.querySelectorAll(selector);
+        let targetEl = null;
+        for (let i = 0; i < els.length; i++) {
+          const rc = els[i].getBoundingClientRect();
+          if (rc.bottom > viewTop + 8) { targetEl = els[i]; break; }
+        }
+        if (!targetEl && els.length) targetEl = els[0];
+        if (!targetEl) return this.initialFocusPos || null;
+        const text = targetEl.tagName === 'LI' ? smmOwnLineText(targetEl) : targetEl.textContent;
+        return smmFindLineForItemText(this.md, text);
+      }
+      if (this.initialFocusPos != null && this.initialFocusPage != null && this.page === this.initialFocusPage) {
+        return this.initialFocusPos;
+      }
       const pageDiv = this.flowEl.children[this.page];
-      if (!pageDiv) return null;
-      const el = pageDiv.querySelector('.smr-vline, li, h1:not(.smr-doc-title), h2, h3, h4, h5, h6, blockquote, table');
-      if (!el) return null;
+      if (!pageDiv) return this.initialFocusPos || null;
+      const el = pageDiv.querySelector(selector);
+      if (!el) return this.initialFocusPos || null;
       const text = el.tagName === 'LI' ? smmOwnLineText(el) : el.textContent;
       return smmFindLineForItemText(this.md, text);
     } catch (e) {
-      return null;
+      return this.initialFocusPos || null;
     }
   }
 }
@@ -8642,6 +12259,18 @@ function smmNodeFocusLine(node) {
 class SermonMindmapPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
+
+    // 읽기 모드 줄바꿈 유지 보장: 옵시디언의 '엄격한 줄바꿈(strictLineBreaks)'이 켜져 있으면
+    // 편집 모드에서는 엔터로 나뉜 줄들이 읽기 모드에서 공백 1칸으로 바뀌며 하나로 이어붙는 문제가 생김.
+    // 어떤 기기(맥북, 아이패드 등)에서 열더라도 항상 편집 모드와 똑같이 줄바꿈이 유지되도록 자동 해제.
+    try {
+      if (this.app.vault.getConfig && this.app.vault.getConfig('strictLineBreaks') === true) {
+        if (typeof this.app.vault.setConfig === 'function') {
+          this.app.vault.setConfig('strictLineBreaks', false);
+        }
+      }
+    } catch (e) { /* 무시 */ }
+
     // 설교문 이름을 바꾸면 펜슬 필기 파일도 따라가게
     this.registerEvent(this.app.vault.on('rename', (f, oldPath) => { this.inkOnRename(f, oldPath); }));
     // 보관함(vault) 안 글꼴 폴더(설정 > 번들 글꼴)에 넣어 둔 글꼴 파일을 직접 읽어서
@@ -8702,7 +12331,11 @@ class SermonMindmapPlugin extends Plugin {
     try {
       const strongLineExt = smmBuildEditorStrongLineExtension(this);
       if (strongLineExt) this.registerEditorExtension(strongLineExt);
-
+    } catch (e) { /* 무시 */ }
+    // 노드 명암(배경 음영 %%shade:<색><단계>%%) 라인 배경색 및 주석 숨김 확장
+    try {
+      const shadeExt = smmBuildEditorShadeExtension(this);
+      if (shadeExt) this.registerEditorExtension(shadeExt);
     } catch (e) { /* 무시 */ }
     // 우리 표시(✓/ㆍ/-)가 붙는 목록 줄은 옵시디언 자체 글머리 기호를 숨겨서
     // 표시가 두 개 겹쳐 보이지 않도록 함 — 이것도 화면 표시일 뿐이라 안 되더라도
@@ -8745,12 +12378,15 @@ class SermonMindmapPlugin extends Plugin {
         // 칠하기(성경구절 글꼴을 인라인 !important로 박기, ✓ 줄에 편집 화면용 class 달기)를
         // 하면 안 된다 — 그게 강대상 ✓ 줄 글꼴·인용글 글꼴 설정을 덮어써 "안 바뀌는" 원인이었다.
         if (this._smrRenderDepth > 0) return;
-        try { if (el && el.closest && el.closest('.smr-root')) return; } catch (e) { /* 무시 */ }
+        try { if (el && el.closest && el.closest('.smr-root, .smm-container, .smm-node')) return; } catch (e) { /* 무시 */ }
+        try { smmFixIndentedReadingQuotes(el); } catch (e) { /* 무시 */ }
         try { smmPaintReadingVerses(el, this); } catch (e) { /* 무시 */ }
         try { smmFixReadingHighlightSpacing(el); } catch (e) { /* 무시 */ }
         try { smmFixColorMarks(el); } catch (e) { /* 무시 */ }
         try { smmPaintReadingBodyMarks(el, ctx, this); } catch (e) { /* 무시 */ }
+        try { smmPaintReadingShades(el, ctx); } catch (e) { /* 무시 */ }
         try { smmPaintReadingVerseRefs(el); } catch (e) { /* 무시 */ }
+        try { smmPaintReadingBrackets(el); } catch (e) { /* 무시 */ }
       });
       if (this.edVerseMode === '꺼짐') this.edVerseMode = '읽기 화면만';
     } catch (e) { /* 무시 */ }
@@ -8790,6 +12426,20 @@ class SermonMindmapPlugin extends Plugin {
       this.app.workspace.on('css-change', () => {
         smmClearHeaderFontCache();
         this.updateMmStyleVars();
+        try {
+          if (this.pagesInspector && this.pagesInspector.isOpen()) {
+            const wantDark = typeof document !== 'undefined' && document.body && document.body.classList.contains('theme-dark');
+            this.pagesInspector.colorMode = wantDark ? 'dark' : 'light';
+            const lightBtn = this.pagesInspector.el.querySelector('[data-theme-mode="light"]');
+            const darkBtn = this.pagesInspector.el.querySelector('[data-theme-mode="dark"]');
+            if (lightBtn) lightBtn.classList.toggle('is-active', !wantDark);
+            if (darkBtn) darkBtn.classList.toggle('is-active', wantDark);
+            const active = typeof document !== 'undefined' ? document.activeElement : null;
+            if (!active || !this.pagesInspector.el.contains(active)) {
+              this.pagesInspector.renderBody();
+            }
+          }
+        } catch (e) { /* 무시 */ }
       })
     );
 
@@ -8812,6 +12462,37 @@ class SermonMindmapPlugin extends Plugin {
         '<circle cx="82" cy="32" r="4.5" fill="currentColor"/><circle cx="82" cy="68" r="4.5" fill="currentColor"/>');
     } catch (e) { /* 무시 — 아이콘 등록에 실패하면 아래에서 기본 아이콘을 쓴다 */ }
     this.addRibbonIcon('mic', '설교문 미리보기 (강대상)', () => this.toggleReader());
+
+    // 편집/읽기 화면 우측 상단 액션 바: 점 3개(⋯) 오른쪽에 "설교문 미리보기(강대상)" 아이콘 추가
+    const setupViewActions = () => {
+      try {
+        const leaves = this.app.workspace.getLeavesOfType('markdown');
+        for (const leaf of leaves) {
+          if (!leaf.view || !leaf.view.containerEl) continue;
+          const viewActions = leaf.view.containerEl.querySelector('.view-actions');
+          if (!viewActions) continue;
+          if (viewActions.querySelector('.smm-sermon-preview-btn')) continue;
+
+          const btn = leaf.view.addAction('mic', '설교문 미리보기 (강대상)', () => {
+            this.toggleReader(leaf);
+          });
+          if (btn) {
+            btn.classList.add('smm-sermon-preview-btn');
+            const moreBtn = viewActions.querySelector('.clickable-icon[aria-label*="옵션"], .clickable-icon[aria-label*="options"], .mod-more-options');
+            if (moreBtn && moreBtn.parentElement === viewActions) {
+              viewActions.insertBefore(btn, moreBtn);
+            } else {
+              viewActions.appendChild(btn);
+            }
+          }
+        }
+      } catch (e) { /* 무시 */ }
+    };
+
+    this.app.workspace.onLayoutReady(() => setupViewActions());
+    this.registerEvent(this.app.workspace.on('layout-change', setupViewActions));
+    this.registerEvent(this.app.workspace.on('active-leaf-change', setupViewActions));
+    this.registerEvent(this.app.workspace.on('file-open', setupViewActions));
     this.addRibbonIcon('git-fork', '설교문 ↔ 마인드맵 전환', () => this.toggleView());
     this.addRibbonIcon('smm-split-text-mindmap', '글 + 마인드맵 동시에 보기 (화면 분할)', () => this.toggleSplitView());
 
@@ -8858,6 +12539,116 @@ class SermonMindmapPlugin extends Plugin {
     // Bible Finder 를 나중에 켰거나 다시 불러온 경우 대비 (이미 붙어 있으면 아무 일도 안 함)
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => { tryPatchReplace(); }));
 
+    // 편집 모드(에디터)에서 Shift+Enter 성경 구절 치환(replace-bible-link) 가로채기 및 오타 자동고침(Enter / Ctrl+Z 복원)
+    // (CodeMirror 6 에디터가 기본 줄바꿈으로 소비해 버려 옵시디언 단축키가 무시되는 문제 해결)
+    this.registerDomEvent(
+      document,
+      'keydown',
+      (e) => {
+        // 1) 오타 자동고침 직후 Ctrl+Z / Cmd+Z 입력 시 방금 고쳐진 단어만 원래 오타로 즉시 복원
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !e.isComposing && String(e.key || '').toLowerCase() === 'z') {
+          const ac = this._lastAutocorrect;
+          if (ac && (Date.now() - ac.ts < 10000)) {
+            try {
+              const activeView = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+              const editor = activeView && activeView.editor;
+              if (editor && editor === ac.editor) {
+                const cur = editor.getCursor();
+                const currentSlice = editor.getRange({ line: ac.line, ch: ac.fromCh }, { line: ac.line, ch: ac.toCh });
+                if (currentSlice === ac.replacement && cur && Math.abs(cur.line - ac.line) <= 1 && (cur.line !== ac.line || cur.ch <= ac.toCh + 3)) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.stopImmediatePropagation();
+                  editor.replaceRange(ac.original, { line: ac.line, ch: ac.fromCh }, { line: ac.line, ch: ac.toCh });
+                  this._autocorrectSkip = { line: ac.line, fromCh: ac.fromCh, original: ac.original, ts: Date.now() };
+                  this._lastAutocorrect = null;
+                  new Notice(`자동고침 취소: "${ac.replacement}" → "${ac.original}"`, 2000);
+                  return;
+                }
+              }
+            } catch (err) { /* 무시 */ }
+          }
+        }
+
+        // 2) 일반 Enter 줄바꿈 시 해당 줄 마지막 단어 오타 자동고침 예약
+        if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+          try {
+            if (this.settings && this.settings.edAutocorrectEnabled !== false) {
+              const activeView = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+              const editor = activeView && activeView.editor;
+              if (editor) {
+                const preLine = editor.getCursor().line;
+                window.setTimeout(() => {
+                  smmTryAutocorrectLineEnd(this, editor, preLine);
+                }, 15);
+              }
+            }
+          } catch (err) { /* 무시 */ }
+        }
+
+        // 3) Shift+Enter 성경 구절 치환
+        if (e.key === 'Enter' && e.shiftKey && !e.isComposing && !e.altKey && !e.ctrlKey && !e.metaKey) {
+          try {
+            const activeView = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+            if (!activeView || !activeView.editor) return;
+            const editor = activeView.editor;
+            const cursor = editor.getCursor();
+            const lineText = editor.getLine(cursor.line);
+            const sel = editor.getSelection ? editor.getSelection() : '';
+
+            const bfp = this.app.plugins && this.app.plugins.plugins ? this.app.plugins.plugins[BIBLE_FINDER_ID] : null;
+            const targetText = sel && sel.trim().length > 0 ? sel : lineText;
+            if (smmHasBibleRefPattern(targetText, bfp)) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+              if (bfp && typeof bfp.replaceBibleLink === 'function') {
+                bfp.replaceBibleLink(editor);
+              } else {
+                this.app.commands.executeCommandById(BIBLE_FINDER_ID + ':replace-bible-link');
+              }
+            }
+          } catch (err) { /* 무시 */ }
+        }
+      },
+      true // capture 단계로 등록하여 CodeMirror 6 줄바꿈보다 먼저 낚아챔
+    );
+
+    // 편집 모드(에디터)에서 스페이스바 · 문장부호(.,?!;:)]) · 모바일 엔터 입력 시 오타 자동고침
+    this.registerDomEvent(
+      document,
+      'input',
+      (e) => {
+        try {
+          if (!this.settings || this.settings.edAutocorrectEnabled === false) return;
+          const t = e.target;
+          if (t && t.closest && t.closest('.modal, .smm-pages-inspector, .smm-edit, input, textarea')) return;
+          const it = String(e.inputType || '');
+          if (it.startsWith('delete') || it.startsWith('history') || it.indexOf('Paste') !== -1 || it.indexOf('Drop') !== -1) return;
+
+          const activeView = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+          if (!activeView || !activeView.editor) return;
+          const editor = activeView.editor;
+
+          if (it === 'insertLineBreak' || it === 'insertParagraph') {
+            window.setTimeout(() => {
+              const c = editor.getCursor();
+              if (c && c.line > 0) smmTryAutocorrectLineEnd(this, editor, c.line - 1);
+            }, 15);
+            return;
+          }
+
+          const data = String(e.data || '');
+          if (data && SMM_AUTOCORRECT_DELIM_RE.test(data.slice(-1))) {
+            window.setTimeout(() => {
+              smmTryAutocorrectEditor(this, editor);
+            }, 10);
+          }
+        } catch (err) { /* 무시 */ }
+      },
+      true
+    );
+
     // Bible Finder 스트롱코드를 파이썬 없이 동작하게 연결
     this.app.workspace.onLayoutReady(() => {
       if (this.patchBibleFinder()) { this.refreshOpenStrongViews(); return; }
@@ -8889,6 +12680,27 @@ class SermonMindmapPlugin extends Plugin {
       },
     });
 
+    // macOS Apple Pages 스타일 플로팅 포맷·스타일 인스펙터
+    this.pagesInspector = new SmmPagesInspector(this);
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', (leaf) => {
+        try {
+          if (leaf && leaf.view && leaf.view.editor) {
+            this.pagesInspector.lastEditor = leaf.view.editor;
+          }
+        } catch (e) { /* 무시 */ }
+      })
+    );
+    this.addCommand({
+      id: 'smm-open-style-inspector',
+      name: '설교 포맷 · 스타일 인스펙터 열기/닫기 (Pages 스타일)',
+      hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'I' }],
+      callback: () => {
+        const mv = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+        this.pagesInspector.toggle(mv && mv.editor ? mv.editor : null);
+      },
+    });
+
     // 한자 변환 — 드래그로 고른 단어(또는 커서 바로 앞 단어)를 한자로. 기본 단축키 F9,
     // 옵시디언 설정 → 단축키에서 "한자 변환"을 검색해 바꿀 수 있다(마인드맵 입력칸에서도 같은 키).
     // 스트롱 원어 성경 창 아래쪽 사전 풀이 속 "G4352", "H1234" 같은 링크를 누르면
@@ -8903,16 +12715,218 @@ class SermonMindmapPlugin extends Plugin {
       callback: () => this.hanjaConvertActive(),
     });
 
+    this.addCommand({
+      id: 'smm-open-autocorrect-modal',
+      name: '오타 자동고침(자동 대치) 단어장 열기 / 등록',
+      callback: () => {
+        const mv = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+        const ed = mv && mv.editor ? mv.editor : null;
+        let initTypo = '';
+        try {
+          if (ed && ed.somethingSelected()) {
+            const sel = String(ed.getSelection() || '').trim();
+            if (sel && !/\s/.test(sel) && sel.length <= 25) initTypo = sel;
+          }
+        } catch (e) { /* 무시 */ }
+        new SmmAutocorrectModal(this.app, this, initTypo, (rep) => {
+          if (ed && ed.somethingSelected()) ed.replaceSelection(rep);
+        }).open();
+      },
+    });
+
     this.registerEvent(
       this.app.workspace.on('editor-menu', (menu, editor, view) => {
         try {
-          if (!editor || !editor.somethingSelected()) return;
-          menu.addItem((item) =>
-            item.setTitle('한자 변환').setIcon('replace').onClick(() => this.hanjaConvertEditor(editor, view))
-          );
+          if (editor && editor.somethingSelected()) {
+            menu.addItem((item) =>
+              item.setTitle('한자 변환').setIcon('replace').onClick(() => this.hanjaConvertEditor(editor, view))
+            );
+          }
+        } catch (e) { /* 무시 */ }
+
+        // 현재 줄에 이미지 링크가 있으면 AI OCR 변환 메뉴 노출
+        try {
+          if (editor) {
+            const cursor = editor.getCursor();
+            const line = editor.getLine(cursor.line);
+            if (smmFindImageMatchInLine(line, cursor.ch)) {
+              menu.addItem((item) =>
+                item
+                  .setTitle('AI 이미지 텍스트 변환 (OCR)')
+                  .setIcon('scan-text')
+                  .onClick(() => smmOcrImageAtCursor(this, editor))
+              );
+            }
+          }
+        } catch (e) { /* 무시 */ }
+
+        try {
+          if (editor) {
+            menu.addItem((item) =>
+              item
+                .setTitle('클립보드 이미지 AI 텍스트 변환 붙여넣기')
+                .setIcon('clipboard-paste')
+                .onClick(() => smmOcrClipboardImage(this, editor))
+            );
+          }
+        } catch (e) { /* 무시 */ }
+
+        // 대지 기호 변경 및 노드 배경 음영 컨텍스트 메뉴 (우클릭 / 롱탭)
+        try {
+          if (editor) {
+            menu.addSeparator();
+            menu.addItem((item) =>
+              item
+                .setTitle('대지 기호 변경...')
+                .setIcon('check-square')
+                .onClick(() => {
+                  new SmmMarkModal(this.app, (mark) => {
+                    smmTransformSelectedLines(editor, (l) => smmSetLineMark(l, mark));
+                  }).open();
+                })
+            );
+            try {
+              menu.addItem((item) => {
+                item.setTitle('대지 기호 빠른 선택').setIcon('list');
+                const sub = item.setSubmenu ? item.setSubmenu() : null;
+                if (sub) {
+                  const presets = [
+                    { id: '●', name: '●  동그라미' },
+                    { id: '■', name: '■  네모' },
+                    { id: '◆', name: '◆  다이아' },
+                    { id: '▶', name: '▶  삼각형' },
+                    { id: '★', name: '★  별표' },
+                    { id: '※', name: '※  참고표' },
+                    { id: '✓', name: '✓  체크표' },
+                  ];
+                  for (const p of presets) {
+                    sub.addItem((si) =>
+                      si.setTitle(p.name).onClick(() => smmTransformSelectedLines(editor, (l) => smmSetLineMark(l, p.id)))
+                    );
+                  }
+                  sub.addSeparator();
+                  sub.addItem((si) =>
+                    si.setTitle('대지 기호 전체 팔레트...').setIcon('palette').onClick(() => {
+                      new SmmMarkModal(this.app, (mark) => {
+                        smmTransformSelectedLines(editor, (l) => smmSetLineMark(l, mark));
+                      }).open();
+                    })
+                  );
+                  sub.addItem((si) =>
+                    si.setTitle('기호 해제 (기본으로)').setIcon('trash-2').onClick(() => smmTransformSelectedLines(editor, (l) => smmSetLineMark(l, null)))
+                  );
+                }
+              });
+            } catch (e) { /* 모바일 환경 setSubmenu 미지원 시 무시 */ }
+
+            menu.addItem((item) =>
+              item
+                .setTitle('노드 배경 음영 (명암)...')
+                .setIcon('palette')
+                .onClick(() => {
+                  new SmmShadeModal(this.app, (color, level) => {
+                    if (color && level) {
+                      smmTransformSelectedLines(editor, (l) => l.replace(SMM_SHADE_RE, '') + ` %%shade:${color}${level}%%`);
+                    } else {
+                      smmTransformSelectedLines(editor, smmClearNodeShade);
+                    }
+                  }).open();
+                })
+            );
+            menu.addItem((item) =>
+              item
+                .setTitle('포맷 · 스타일 인스펙터 (Pages)...')
+                .setIcon('sliders')
+                .onClick(() => {
+                  if (this.pagesInspector) this.pagesInspector.open(editor);
+                })
+            );
+            menu.addItem((item) => {
+              let selWord = '';
+              try {
+                if (editor.somethingSelected()) {
+                  const s = String(editor.getSelection() || '').trim();
+                  if (s && !/\s/.test(s) && s.length <= 25) selWord = s;
+                }
+              } catch (e) { /* 무시 */ }
+              item
+                .setTitle(selWord ? `오타 자동고침 등록 ("${selWord}")...` : '오타 자동고침 단어장 / 등록...')
+                .setIcon('wand')
+                .onClick(() => {
+                  new SmmAutocorrectModal(this.app, this, selWord, (rep) => {
+                    if (selWord && editor.somethingSelected()) {
+                      editor.replaceSelection(rep);
+                    }
+                  }).open();
+                });
+            });
+          }
         } catch (e) { /* 무시 */ }
       })
     );
+
+    // ===== 대지 기호(아이콘) 개별 줄 변경 명령어 체계 =====
+    const markCommands = [
+      { id: 'smm-format-mark-cycle',    name: '대지 기호 순환 (●➔■➔◆➔▶➔★➔※➔해제)', run: (ed) => smmTransformSelectedLines(ed, (l) => smmCycleLineMark(l, this.settings)) },
+      { id: 'smm-format-mark-modal',    name: '대지 기호 선택 팔레트 열기',        run: (ed) => {
+        new SmmMarkModal(this.app, (mark) => smmTransformSelectedLines(ed, (l) => smmSetLineMark(l, mark))).open();
+      }},
+      { id: 'smm-format-mark-circle',   name: '대지 기호: 동그라미 (●)',           run: (ed) => smmTransformSelectedLines(ed, (l) => smmSetLineMark(l, '●')) },
+      { id: 'smm-format-mark-square',   name: '대지 기호: 네모 (■)',               run: (ed) => smmTransformSelectedLines(ed, (l) => smmSetLineMark(l, '■')) },
+      { id: 'smm-format-mark-diamond',  name: '대지 기호: 다이아몬드 (◆)',         run: (ed) => smmTransformSelectedLines(ed, (l) => smmSetLineMark(l, '◆')) },
+      { id: 'smm-format-mark-triangle', name: '대지 기호: 삼각형 (▶)',             run: (ed) => smmTransformSelectedLines(ed, (l) => smmSetLineMark(l, '▶')) },
+      { id: 'smm-format-mark-star',     name: '대지 기호: 별표 (★)',               run: (ed) => smmTransformSelectedLines(ed, (l) => smmSetLineMark(l, '★')) },
+      { id: 'smm-format-mark-ref',      name: '대지 기호: 참고표 (※)',             run: (ed) => smmTransformSelectedLines(ed, (l) => smmSetLineMark(l, '※')) },
+      { id: 'smm-format-mark-check',    name: '대지 기호: 체크표 (✓)',             run: (ed) => smmTransformSelectedLines(ed, (l) => smmSetLineMark(l, '✓')) },
+      { id: 'smm-format-mark-clear',    name: '대지 기호 해제 (기본 가상기호로)',   run: (ed) => smmTransformSelectedLines(ed, (l) => smmSetLineMark(l, null)) },
+    ];
+    for (const cmd of markCommands) {
+      this.addCommand({
+        id: cmd.id,
+        name: cmd.name,
+        editorCallback: cmd.run,
+      });
+    }
+
+    // ===== 노드 배경 음영(명암) 명령어 체계 =====
+    // 명령어 팔레트(Ctrl+P), 모바일 툴바(아이패드), 단축키 설정에서 바로 사용 가능
+    const shadeCommands = [
+      { id: 'smm-format-shade-yellow', name: '노드 음영 순환 - 노랑 (1➔2➔3➔해제)', run: (ed) => smmTransformSelectedLines(ed, (l) => smmCycleNodeShade(l, 'y')) },
+      { id: 'smm-format-shade-orange', name: '노드 음영 순환 - 주황 (1➔2➔3➔해제)', run: (ed) => smmTransformSelectedLines(ed, (l) => smmCycleNodeShade(l, 'o')) },
+      { id: 'smm-format-shade-red',    name: '노드 음영 순환 - 빨강 (1➔2➔3➔해제)', run: (ed) => smmTransformSelectedLines(ed, (l) => smmCycleNodeShade(l, 'r')) },
+      { id: 'smm-format-shade-green',  name: '노드 음영 순환 - 초록 (1➔2➔3➔해제)', run: (ed) => smmTransformSelectedLines(ed, (l) => smmCycleNodeShade(l, 'g')) },
+      { id: 'smm-format-shade-blue',   name: '노드 음영 순환 - 파랑 (1➔2➔3➔해제)', run: (ed) => smmTransformSelectedLines(ed, (l) => smmCycleNodeShade(l, 'b')) },
+      { id: 'smm-format-shade-purple', name: '노드 음영 순환 - 보라 (1➔2➔3➔해제)', run: (ed) => smmTransformSelectedLines(ed, (l) => smmCycleNodeShade(l, 'p')) },
+      { id: 'smm-format-shade-clear',  name: '노드 음영 지우기 (해제)',             run: (ed) => smmTransformSelectedLines(ed, smmClearNodeShade) },
+      { id: 'smm-format-shade-modal',  name: '노드 음영 팔레트 열기',               run: (ed) => {
+        new SmmShadeModal(this.app, (color, level) => {
+          if (color && level) {
+            smmTransformSelectedLines(ed, (l) => l.replace(SMM_SHADE_RE, '') + ` %%shade:${color}${level}%%`);
+          } else {
+            smmTransformSelectedLines(ed, smmClearNodeShade);
+          }
+        }).open();
+      }},
+    ];
+    for (const cmd of shadeCommands) {
+      this.addCommand({
+        id: cmd.id,
+        name: cmd.name,
+        editorCallback: cmd.run,
+      });
+    }
+
+    this.addCommand({
+      id: 'smm-ocr-image-at-cursor',
+      name: '현재 줄의 이미지 AI 텍스트 변환 (OCR)',
+      editorCallback: (editor) => smmOcrImageAtCursor(this, editor),
+    });
+
+    this.addCommand({
+      id: 'smm-ocr-clipboard-image',
+      name: '클립보드 이미지 AI 텍스트 변환하여 붙여넣기',
+      editorCallback: (editor) => smmOcrClipboardImage(this, editor),
+    });
 
     this.addCommand({
       id: 'toggle-mindmap',
@@ -8938,6 +12952,12 @@ class SermonMindmapPlugin extends Plugin {
       callback: () => this.hotkeyDiagnose(),
     });
 
+    this.addCommand({
+      id: 'smm-install-bible-data',
+      name: '성경 · 원어(스트롱) · 글꼴 데이터 원클릭 자동 설치',
+      callback: () => smmDownloadAndInstallData(this),
+    });
+
     // 파일 우클릭 메뉴
     this.registerEvent(
       this.app.workspace.on('file-menu', (menu, file, source) => {
@@ -8960,6 +12980,16 @@ class SermonMindmapPlugin extends Plugin {
                 const leaf = this.app.workspace.getLeaf(false);
                 await leaf.setViewState({ type: VIEW_TYPE, state: { file: file.path }, active: true });
               })
+          );
+        }
+
+        // 이미지 파일 자체 우클릭 시 AI OCR 메뉴 표시
+        if (file && file.extension && /^(png|jpg|jpeg|webp|gif|bmp)$/i.test(file.extension)) {
+          menu.addItem((item) =>
+            item
+              .setTitle('AI 이미지 텍스트 변환 (OCR)')
+              .setIcon('scan-text')
+              .onClick(() => smmOcrSpecificFile(this, file))
           );
         }
       })
@@ -8999,7 +13029,27 @@ class SermonMindmapPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => { this.updateCountStatus(); soon(700); }));
     this.registerEvent(this.app.workspace.on('layout-change', () => this.updateCountStatus()));
     this.registerEvent(this.app.workspace.on('editor-change', () => soon(1500)));
-    this.app.workspace.onLayoutReady(() => { this.updateCountStatus(); soon(1500); });
+    this.app.workspace.onLayoutReady(async () => {
+      this.updateCountStatus();
+      soon(1500);
+      try {
+        const ad = this.app.vault.adapter;
+        const hasBibles = await ad.exists('_bibles');
+        const hasStrong = (await ad.exists('_strong')) || (await ad.exists('_strong_json'));
+        if (!hasBibles && !hasStrong) {
+          const n = new Notice(
+            '📖 [설교마인드맵] 성경·스트롱 원어 데이터가 없습니다.\n여기를 클릭하면 원클릭 자동 설치가 시작됩니다.',
+            15000
+          );
+          if (n && n.noticeEl) {
+            n.noticeEl.style.cursor = 'pointer';
+            n.noticeEl.addEventListener('click', () => {
+              smmDownloadAndInstallData(this);
+            });
+          }
+        }
+      } catch (e) {}
+    });
   }
   updateCountStatus() {
     if (!this.countEl) return;
@@ -9251,9 +13301,20 @@ class SermonMindmapPlugin extends Plugin {
 
   onunload() {
     try {
+      const previewBtns = document.querySelectorAll('.smm-sermon-preview-btn');
+      previewBtns.forEach(b => b.remove());
+    } catch (e) { /* 무시 */ }
+    try {
+      if (this.pagesInspector) {
+        this.pagesInspector.close();
+        this.pagesInspector = null;
+      }
+    } catch (e) { /* 무시 */ }
+    try {
       const bf = this.app.plugins && this.app.plugins.plugins ? this.app.plugins.plugins[BIBLE_FINDER_ID] : null;
       if (bf && bf.__smmOrigReplaceBibleLink) {
         bf.replaceBibleLink = bf.__smmOrigReplaceBibleLink;
+        if (bf.__smmOrigAssembleSingleVersion) bf.assembleSingleVersion = bf.__smmOrigAssembleSingleVersion;
         bf.__smmReplacePatched = false;
       }
     } catch (e) { /* 무시 */ }
@@ -9418,6 +13479,15 @@ class SermonMindmapPlugin extends Plugin {
           await withTimeout(face.load(), 30000);
           document.fonts.add(face);
           SMM_BUNDLED_FONT_NAMES.add(familyName);
+          for (const v of smmFontNameVariants(familyName)) {
+            if (v !== familyName) {
+              try {
+                const fv = new FontFace(v, buf);
+                await fv.load();
+                document.fonts.add(fv);
+              } catch (e) {}
+            }
+          }
           ok++;
         } catch (e) {
           fail++;
@@ -9479,7 +13549,13 @@ class SermonMindmapPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const loaded = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
+    if (!loaded || !loaded.edAutocorrectRules || typeof loaded.edAutocorrectRules !== 'object') {
+      this.settings.edAutocorrectRules = Object.assign({}, DEFAULT_SETTINGS.edAutocorrectRules);
+    } else {
+      this.settings.edAutocorrectRules = Object.assign({}, loaded.edAutocorrectRules);
+    }
     // 읽기 모드의 처음 여백(48px)과 글줄 폭(1000px)은 넓은 화면에서 좌우가 너무 비어
     // 보였다. 기본값을 줄였는데, 이미 저장된 설정이 있으면 기본값을 바꿔도 반영되지
     // 않으므로 "예전 기본값 그대로였던 경우"에 한해 한 번만 새 값으로 옮겨 준다.
@@ -9490,6 +13566,10 @@ class SermonMindmapPlugin extends Plugin {
       this.settings.rdSpaceMigrated = true;
       try { await this.saveData(this.settings); } catch (e) { /* 무시 */ }
     }
+    if (smmNumOr(this.settings.edMarkSize, 0) > 0 && smmNumOr(this.settings.edMarkSize, 0) < 6) {
+      this.settings.edMarkSize = '';
+      try { await this.saveData(this.settings); } catch (e) { /* 무시 */ }
+    }
   }
 
   async saveSettings() {
@@ -9497,6 +13577,15 @@ class SermonMindmapPlugin extends Plugin {
     this.updateMmStyleVars();
     // 편집 화면의 성경구절 글꼴도 바로 다시 입힌다
     try { if (this.edVerseWatcher) this.edVerseWatcher.refresh(); } catch (e) { /* 무시 */ }
+    // 설정 창에서 바꾼 값도 열려 있는 포맷·스타일 인스펙터에 실시간 동기화 (인스펙터 내부 입력 중일 때는 제외)
+    try {
+      if (this.pagesInspector && this.pagesInspector.isOpen()) {
+        const active = typeof document !== 'undefined' ? document.activeElement : null;
+        if (!active || !this.pagesInspector.el || !this.pagesInspector.el.contains(active)) {
+          this.pagesInspector.renderBody();
+        }
+      }
+    } catch (e) { /* 무시 */ }
   }
 
   /**
@@ -9560,6 +13649,7 @@ class SermonMindmapPlugin extends Plugin {
       smmLocalFontFaceCss('rdbody', s.rdFontBody) +
       smmLocalFontFaceCss('rdhead', s.rdFontHead) +
       smmLocalFontFaceCss('rdverse', s.rdFontVerse) +
+      smmLocalFontFaceCss('markline', s.markLineFont) +
       // 강대상 ✓ 줄 글자 폰트도 같은 별칭(@font-face src:local(…))으로 감싼다. "NanumSquare Neo
       // ExtraBold"처럼 굵기까지 붙은 이름은 글꼴 "가족 이름"이 아니라 "전체 이름"이라, CSS
       // font-family로는 못 찾고 local()로만 찾힌다 — 이 별칭이 없어서 ✓ 줄만 글꼴이 안 바뀌고
@@ -9579,24 +13669,54 @@ class SermonMindmapPlugin extends Plugin {
         // 얻을 수 있어 "제목1, 제목2가 크기 차이가 없다" 문제가 생기지 않는다.
         const hm = smmProbeThemeHeaderMetrics();
         const FALLBACK_SIZE = [null, '1.6em', '1.35em', '1.2em', '1.1em', '1.03em', '0.97em'];
+        const isDark = typeof document !== 'undefined' && document.body && document.body.classList.contains('theme-dark');
+        let baseEdPx = smmNumOr(s.edSizeBody, 0);
+        if (!(baseEdPx > 0)) {
+          try {
+            baseEdPx = parseFloat(getComputedStyle(document.body).getPropertyValue('--font-text-size')) || 16;
+          } catch (e) { baseEdPx = 16; }
+        }
         return [1, 2, 3, 4, 5, 6].map((lv) => {
           const m = hm[lv] || {};
+          let headColor = m.color || 'var(--text-normal)';
+          if (s.mmSyncColors !== false) {
+            const edH = smmHexOr(s[isDark ? ('edColorDarkH' + lv) : ('edColorH' + lv)], '');
+            if (edH) headColor = '#' + edH;
+          }
+          const customHPx = smmNumOr(s['edSizeH' + lv], 0);
+          let headSize = m.size || FALLBACK_SIZE[lv];
+          if (customHPx > 0 && baseEdPx > 0) {
+            const hRatio = Math.round((customHPx / baseEdPx) * 10000) / 10000;
+            headSize = `calc(var(--smm-mm-size-body, 13.5px) * ${hRatio})`;
+          }
           return (
             `--smm-mm-font-h${lv}: ${this.mmEditorFont(lv)};` +
-            `--smm-mm-size-h${lv}: ${m.size || FALLBACK_SIZE[lv]};` +
-            `--smm-mm-color-h${lv}: ${m.color || 'var(--text-normal)'};` +
+            `--smm-mm-size-h${lv}: ${headSize};` +
+            `--smm-mm-color-h${lv}: ${headColor};` +
             `--smm-mm-weight-h${lv}: ${m.weight || 'var(--bold-weight, 700)'};`
           );
         }).join('');
       })() +
       `--smm-mm-font-verse: ${smmFontStackVerse(s.mmFontVerse, 'verse')};` +
       `--smm-mm-size-verse: ${verseSize};` +
+      (() => {
+        if (s.mmSyncColors !== false) {
+          const isDark = typeof document !== 'undefined' && document.body && document.body.classList.contains('theme-dark');
+          let vCol = smmHexOr(s[isDark ? 'edColorDarkVerse' : 'edColorVerse'], '');
+          let qCol = smmHexOr(s[isDark ? 'edColorDarkQuote' : 'edColorQuote'], '');
+          let out = '';
+          if (vCol) out += `--smm-mm-color-verse: #${vCol};`;
+          if (qCol) out += `--smm-mm-color-quote: #${qCol};`;
+          return out;
+        }
+        return '';
+      })() +
       `--smm-mm-width-verse: ${widthVerse}px;` +
       `--smm-mm-clamp-verse: ${clampVerse};` +
       // 편집 화면의 성경구절 줄 크기 — 비워두면 편집기 기본 크기를 그대로 씀
       `--smm-ed-size-verse: ${smmNumOr(s.edVerseSize, 0) > 0 ? smmNumOr(s.edVerseSize, 0) + 'px' : 'inherit'};` +
-      // 편집 화면의 깊이 표시(✓/-) 글자 크기 — 비워두면 기본 크기(0.85em 상당)
-      `--smm-ed-mark-size: ${smmNumOr(s.edMarkSize, 0) > 0 ? smmNumOr(s.edMarkSize, 0) + 'px' : '0.85em'};` +
+      // 편집 화면의 깊이 표시(✓/-) 글자 크기 — 비워두면 기본 크기(0.85em 상당). 예전 배율 값(1 등)이 남아 있는 경우 오동작 방지
+      `--smm-ed-mark-size: ${smmNumOr(s.edMarkSize, 0) >= 6 ? smmNumOr(s.edMarkSize, 0) + 'px' : '0.85em'};` +
       // 들여쓰기 없는(0단계) 줄의 ✓ 표시 — 편집 화면·옵시디언 읽기 보기·마인드맵
       // 공통(smm-ed-vmark-strong, smm-node-mark-strong, smm-ed-vline-strong,
       // smm-node-vline-strong 네 곳에서 씀). "설교문 읽기 모드(강대상)"는 실제
@@ -9620,7 +13740,7 @@ class SermonMindmapPlugin extends Plugin {
       '}' +
       smmEditorVerseCss(s) +
       smmMarkLineCss(s) +
-      smmGlobalHeadFontCss(s) + smmCaretCss(s);
+      smmGlobalHeadFontCss(s) + smmCaretCss(s) + smmEditorSpacingCss(s);
     if (!this._mmStyleEl) {
       this._mmStyleEl = document.createElement('style');
       this._mmStyleEl.id = 'smm-mm-style-vars';
@@ -9642,8 +13762,8 @@ class SermonMindmapPlugin extends Plugin {
   }
 
   /** 설교문 ↔ 읽기 모드 오가기 */
-  async toggleReader() {
-    const leaf = this.app.workspace.getMostRecentLeaf();
+  async toggleReader(targetLeaf) {
+    const leaf = targetLeaf || this.app.workspace.getMostRecentLeaf();
     if (!leaf) return;
     const view = leaf.view;
     const vt = view && view.getViewType ? view.getViewType() : '';
@@ -9656,18 +13776,31 @@ class SermonMindmapPlugin extends Plugin {
     }
     const file = view && view.file;
     if ((vt === 'markdown' || vt === VIEW_TYPE) && file) {
-      // 편집모드(마크다운)에서 넘어가는 것이라면, 커서가 있던 줄을 기억해뒀다가
-      // 설교문 읽기모드가 열리면 1쪽이 아니라 그 줄이 있는 쪽으로 바로 가도록 함
+      // 편집모드(마크다운) 또는 마인드맵에서 넘어가는 것이라면, 커서가 있던 자리({ line, ch })
+      // 또는 선택된 노드의 줄을 기억해뒀다가 설교문 읽기모드가 열리면 1쪽이 아니라
+      // 그 줄이 있는 쪽으로 바로 가도록 하고, 다시 Esc로 돌아올 때도 그 자리로 돌아가게 함
       // (SermonReaderView.setViewData()/layout()에서 소비)
-      let cursorLine = null;
+      let cursorPos = null;
       if (vt === 'markdown') {
         try {
           if (view.editor && typeof view.editor.getCursor === 'function') {
-            cursorLine = view.editor.getCursor().line;
+            const cur = view.editor.getCursor();
+            if (cur && typeof cur.line === 'number') {
+              cursorPos = { line: cur.line, ch: typeof cur.ch === 'number' ? cur.ch : null };
+            }
           }
         } catch (e) { /* 무시 — 못 찾으면 기존처럼 1쪽으로 열림 */ }
+      } else if (vt === VIEW_TYPE) {
+        try {
+          const sel = (typeof view.selectedNode === 'function') ? view.selectedNode() : null;
+          const selLine = smmNodeFocusLine(sel);
+          if (typeof selLine === 'number') {
+            cursorPos = { line: selLine, ch: null };
+          }
+        } catch (e) { /* 무시 */ }
       }
-      this.pendingReaderFocusLine = cursorLine;
+      this.pendingReaderFocusPos = cursorPos;
+      this.pendingReaderFocusLine = cursorPos ? cursorPos.line : null;
       await leaf.setViewState({ type: VIEW_TYPE_READ, state: { file: file.path }, active: true });
       return;
     }
@@ -9724,6 +13857,51 @@ class SermonMindmapPlugin extends Plugin {
     } catch (e) { /* 무시 */ }
   }
 
+  /** 대지·소지·세부 기호 모양이나 깊이 표시 설정이 바뀌었을 때 모든 화면(편집/읽기/마인드맵/강대상)을 즉시 갱신 */
+  refreshAllMarkViews() {
+    _smmEditorMarkExtGen++;
+    _smmBodyMarksCache = { text: null, marks: null, cfgKey: null };
+
+    // 1. 편집 화면 (Live Preview / Source mode) & 읽기 보기 (Reading view)
+    try {
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        if (leaf.view && typeof leaf.view.getViewType === 'function' && leaf.view.getViewType() === 'markdown') {
+          const editor = leaf.view.editor;
+          if (editor && editor.cm && typeof editor.cm.dispatch === 'function') {
+            try {
+              editor.cm.dispatch({});
+            } catch (e) { /* 무시 */ }
+          }
+          if (leaf.view.previewMode && typeof leaf.view.previewMode.rerender === 'function') {
+            try {
+              leaf.view.previewMode.rerender(true);
+            } catch (e) { /* 무시 */ }
+          }
+        }
+      });
+    } catch (e) { /* 무시 */ }
+
+    // 2. 마인드맵 화면
+    try {
+      const mmLeaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
+      for (const leaf of mmLeaves) {
+        const v = leaf.view;
+        if (v && typeof v.renderMap === 'function') {
+          v.renderMap();
+        }
+      }
+    } catch (e) { /* 무시 */ }
+
+    // 3. 설교문 읽기 모드 (강대상)
+    try {
+      this.refreshReaders();
+    } catch (e) { /* 무시 */ }
+
+    // 4. 스타일 변수 및 옵시디언 옵션 반영
+    try { this.updateMmStyleVars(); } catch (e) { /* 무시 */ }
+    try { this.app.workspace.updateOptions(); } catch (e) { /* 무시 */ }
+  }
+
   async toggleView() {
     const leaf = this.app.workspace.getMostRecentLeaf();
     if (!leaf) return;
@@ -9736,16 +13914,24 @@ class SermonMindmapPlugin extends Plugin {
       await this.switchToMarkdown(leaf, smmNodeFocusLine(sel));
       return;
     }
-    if (vt === 'markdown' && view.file) {
+    if ((vt === 'markdown' || vt === VIEW_TYPE_READ) && view.file) {
       const path = view.file.path;
-      // 커서가 있던 줄을 기억해뒀다가, 마인드맵이 열리면 전체 맞춤 대신
-      // 그 노드가 바로 보이도록 함 (SermonMindmapView.setViewData()에서 소비)
+      // 커서가 있던 줄(편집모드)이나 지금 읽고 있던 줄(강대상)을 기억해뒀다가,
+      // 마인드맵이 열리면 전체 맞춤 대신 그 노드가 바로 보이도록 함
+      // (SermonMindmapView.setViewData()에서 소비)
       let cursorLine = null;
-      try {
-        if (view.editor && typeof view.editor.getCursor === 'function') {
-          cursorLine = view.editor.getCursor().line;
-        }
-      } catch (e) { /* 무시 — 못 찾으면 기존처럼 전체 맞춤으로 열림 */ }
+      if (vt === 'markdown') {
+        try {
+          if (view.editor && typeof view.editor.getCursor === 'function') {
+            cursorLine = view.editor.getCursor().line;
+          }
+        } catch (e) { /* 무시 — 못 찾으면 기존처럼 전체 맞춤으로 열림 */ }
+      } else if (vt === VIEW_TYPE_READ) {
+        try {
+          const top = (typeof view.getCurrentTopLine === 'function') ? view.getCurrentTopLine() : null;
+          cursorLine = (typeof top === 'object' && top !== null) ? top.line : top;
+        } catch (e) { /* 무시 */ }
+      }
       this.pendingFocusLine = cursorLine;
       await leaf.setViewState({ type: VIEW_TYPE, state: { file: path }, active: true });
       return;
@@ -9826,6 +14012,22 @@ class SermonMindmapPlugin extends Plugin {
     bf.__smmReplacePatched = true;
     const orig = bf.replaceBibleLink;
     bf.__smmOrigReplaceBibleLink = orig;
+    if (typeof bf.assembleSingleVersion === 'function' && !bf.__smmOrigAssembleSingleVersion) {
+      const origAssemble = bf.assembleSingleVersion;
+      bf.__smmOrigAssembleSingleVersion = origAssemble;
+      bf.assembleSingleVersion = function (verses, isEnglish) {
+        const lines = origAssemble.call(this, verses, isEnglish);
+        if (Array.isArray(verses) && verses.length > 1 && Array.isArray(lines) && lines.length > 0) {
+          const refNums = smmFormatVerseRefNums(verses);
+          const naiveRange = `${verses[0].chapter}:${verses[0].verse}-${verses[verses.length - 1].verse}`;
+          const smartRange = `${verses[0].chapter}:${refNums}`;
+          if (naiveRange !== smartRange) {
+            return lines.map((ln) => String(ln).replace(naiveRange, smartRange));
+          }
+        }
+        return lines;
+      };
+    }
     bf.replaceBibleLink = function (editor) {
       const wrapped = {
         getCursor: (...a) => editor.getCursor(...a),
@@ -9838,6 +14040,7 @@ class SermonMindmapPlugin extends Plugin {
           return editor.replaceRange(repl, from, end, ...rest);
         },
       };
+      if (smmEnhancedReplaceBibleLink(this, wrapped)) return;
       return orig.call(this, wrapped);
     };
   }
@@ -10089,8 +14292,10 @@ class SermonMindmapPlugin extends Plugin {
     throw new Error('알 수 없는 동작: ' + action);
   }
 
-  /** 스트롱코드가 왜 안 되는지 화면에서 바로 확인할 수 있게 하는 진단 기능.
-   *  화면을 그대로 캡처해서 공유하면 원인 파악이 가능함(원격으로는 기기를 직접 볼 수 없어서 필요). */
+  async downloadAndInstallBibleData(customUrl) {
+    return await smmDownloadAndInstallData(this, customUrl);
+  }
+
   /**
    * 단축키가 실제로 연결돼 있는지 이 컴퓨터에서 직접 확인해 보여준다.
    * (설정 파일을 밖에서 읽을 수 없으니, 옵시디언 안에서 스스로 점검하도록 만든 것)
@@ -10422,9 +14627,9 @@ class SermonMindmapPlugin extends Plugin {
     }
   }
 
-  /** focusLine을 넘기면, 마크다운(편집) 화면으로 바뀐 뒤 그 줄로 커서를 옮기고
-   *  화면도 그 줄이 보이도록 스크롤한다 — 설교문 읽기 모드에서 Esc(또는 다시
-   *  누르기)로 돌아올 때, 방금 읽던 위치 그대로 편집화면이 열리게 하기 위함. */
+  /** focusLine(줄 번호 또는 { line, ch })을 넘기면, 마크다운(편집) 화면으로 바뀐 뒤
+   *  그 자리로 커서를 옮기고 화면도 그 줄이 보이도록 스크롤한다 — 설교문 읽기 모드에서
+   *  Esc(또는 다시 누르기)로 돌아올 때, 방금 읽던 위치 그대로 편집화면이 열리게 하기 위함. */
   async switchToMarkdown(leaf, focusLine) {
     const view = leaf.view;
     const path = view.file ? view.file.path : null;
@@ -10434,6 +14639,9 @@ class SermonMindmapPlugin extends Plugin {
     }
     await leaf.setViewState({ type: 'markdown', state: { file: path, mode: 'source' }, active: true });
     if (focusLine == null) return;
+    const targetLine = (typeof focusLine === 'object' && focusLine !== null) ? focusLine.line : focusLine;
+    const targetCh = (typeof focusLine === 'object' && focusLine !== null && typeof focusLine.ch === 'number') ? focusLine.ch : null;
+    if (typeof targetLine !== 'number') return;
     // 방금 바뀐 편집화면이 자리를 잡을 시간을 아주 조금 준 뒤 커서를 옮긴다
     setTimeout(() => {
       try {
@@ -10441,8 +14649,13 @@ class SermonMindmapPlugin extends Plugin {
         const editor = mdView && mdView.editor;
         if (!editor || typeof editor.setCursor !== 'function') return;
         const lastLine = editor.lineCount() - 1;
-        const line = Math.max(0, Math.min(focusLine, lastLine));
-        const pos = { line, ch: 0 };
+        const line = Math.max(0, Math.min(targetLine, lastLine));
+        let lineLen = 0;
+        try {
+          if (typeof editor.getLine === 'function') lineLen = (editor.getLine(line) || '').length;
+        } catch (e) { lineLen = 0; }
+        const ch = targetCh != null ? Math.max(0, Math.min(targetCh, lineLen)) : lineLen;
+        const pos = { line, ch };
         editor.setCursor(pos);
         if (typeof editor.scrollIntoView === 'function') {
           editor.scrollIntoView({ from: pos, to: pos }, true);
@@ -10450,6 +14663,156 @@ class SermonMindmapPlugin extends Plugin {
         editor.focus();
       } catch (e) { /* 무시 — 못 옮겨도 기존처럼 열리는 것뿐 */ }
     }, 30);
+  }
+}
+
+/**
+ * ZIP 파일 버퍼를 순수 JS로 풀어서 vault 안에 각 파일로 저장한다.
+ * Central Directory 기반으로 파싱하며 DecompressionStream('deflate-raw')를 사용하여
+ * 윈도우, 맥북, 아이패드 모든 환경에서 초고속으로 파일을 직접 추출한다.
+ */
+async function smmExtractZipToVault(app, zipBuffer, onProgress) {
+  const adapter = app.vault.adapter;
+  const view = new DataView(zipBuffer.buffer, zipBuffer.byteOffset, zipBuffer.byteLength);
+
+  let eocd = -1;
+  for (let i = zipBuffer.byteLength - 22; i >= Math.max(0, zipBuffer.byteLength - 65557); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd === -1) throw new Error('ZIP 파일 형식이 올바르지 않거나 손상되었습니다.');
+
+  const totalEntries = view.getUint16(eocd + 10, true);
+  const cdOffset = view.getUint32(eocd + 16, true);
+  const decoder = new TextDecoder('utf-8');
+
+  const dirCreated = new Set();
+  const ensureDir = async (dirPath) => {
+    if (!dirPath || dirPath === '.' || dirPath === '/') return;
+    if (dirCreated.has(dirPath)) return;
+    const parts = dirPath.split('/');
+    let cur = '';
+    for (const p of parts) {
+      if (!p) continue;
+      cur = cur ? cur + '/' + p : p;
+      if (!dirCreated.has(cur)) {
+        if (!(await adapter.exists(cur))) {
+          try { await adapter.mkdir(cur); } catch (e) {}
+        }
+        dirCreated.add(cur);
+      }
+    }
+  };
+
+  let p = cdOffset;
+  let processed = 0;
+  for (let i = 0; i < totalEntries && p < eocd; i++) {
+    if (view.getUint32(p, true) !== 0x02014b50) break;
+    const method = view.getUint16(p + 10, true);
+    const cSize = view.getUint32(p + 20, true);
+    const uSize = view.getUint32(p + 24, true);
+    const fnLen = view.getUint16(p + 28, true);
+    const extraLen = view.getUint16(p + 30, true);
+    const commentLen = view.getUint16(p + 32, true);
+    const localOffset = view.getUint32(p + 42, true);
+
+    const fnBytes = new Uint8Array(zipBuffer.buffer, zipBuffer.byteOffset + p + 46, fnLen);
+    let relPath = decoder.decode(fnBytes).replace(/\\/g, '/');
+    while (relPath.startsWith('/')) relPath = relPath.slice(1);
+
+    p += 46 + fnLen + extraLen + commentLen;
+
+    if (relPath.endsWith('/')) {
+      await ensureDir(relPath.slice(0, -1));
+      continue;
+    }
+
+    const lastSlash = relPath.lastIndexOf('/');
+    if (lastSlash > 0) {
+      await ensureDir(relPath.slice(0, lastSlash));
+    }
+
+    const localFnLen = view.getUint16(localOffset + 26, true);
+    const localExtraLen = view.getUint16(localOffset + 28, true);
+    const dataOffset = localOffset + 30 + localFnLen + localExtraLen;
+
+    let uncompressedData;
+    if (method === 0) {
+      uncompressedData = new Uint8Array(zipBuffer.buffer, zipBuffer.byteOffset + dataOffset, cSize);
+    } else if (method === 8) {
+      const compData = new Uint8Array(zipBuffer.buffer, zipBuffer.byteOffset + dataOffset, cSize);
+      if (typeof DecompressionStream === 'function') {
+        const ds = new DecompressionStream('deflate-raw');
+        const writer = ds.writable.getWriter();
+        writer.write(compData);
+        writer.close();
+        uncompressedData = new Uint8Array(await new Response(ds.readable).arrayBuffer());
+      } else {
+        uncompressedData = smmInflateGzip(compData);
+      }
+    } else {
+      continue;
+    }
+
+    await adapter.writeBinary(relPath, uncompressedData);
+    processed++;
+    if (onProgress && (processed % 5 === 0 || processed === totalEntries)) {
+      onProgress(processed, totalEntries, relPath);
+    }
+  }
+  if (onProgress) onProgress(processed, totalEntries, '완료');
+}
+
+/**
+ * 깃허브 릴리즈에서 성경·원어·글꼴 데이터 ZIP(약 169MB)을 다운로드하여 볼트에 설치
+ */
+async function smmDownloadAndInstallData(plugin, customUrl) {
+  const primaryUrl = customUrl || (plugin.settings && plugin.settings.bibleDataDownloadUrl) ||
+    'https://github.com/hyod9866/ObsidianSermonMindmap/releases/download/v0.19.0/sermon_bible_data.zip';
+  const fallbackUrls = [
+    'https://github.com/hyod9866/ObsidianSermonMindmap/releases/download/v0.18.9/sermon_bible_data.zip',
+    'https://github.com/hyod9866/ObsidianBibleFinder/releases/download/v1.2.3/sermon_bible_data.zip',
+    'https://github.com/hyod9866/ObsidianBibleFinder/releases/download/v1.2.2/sermon_bible_data.zip'
+  ];
+
+  const notice = new Notice('📦 성경·원어·글꼴 데이터 다운로드 중... (169MB, 잠시 기다려 주세요)', 0);
+  try {
+    let res = null;
+    const urlsToTry = [primaryUrl, ...fallbackUrls.filter((u) => u !== primaryUrl)];
+    for (let i = 0; i < urlsToTry.length; i++) {
+      try {
+        if (i > 0) notice.setMessage(`📦 1차 주소 확인 후 대체 서버(${i}) 연결 중...`);
+        res = await requestUrl({ url: urlsToTry[i], method: 'GET' });
+        if (res && res.status >= 200 && res.status < 300) break;
+      } catch (err) {
+        if (i === urlsToTry.length - 1) throw err;
+      }
+    }
+    if (!res || res.status < 200 || res.status >= 300) {
+      throw new Error(`다운로드 실패 (HTTP ${res ? res.status : '오류'})`);
+    }
+
+    notice.setMessage('📦 다운로드 완료! 볼트에 파일 압축 해제 중...');
+    const zipBytes = new Uint8Array(res.arrayBuffer);
+
+    await smmExtractZipToVault(plugin.app, zipBytes, (cur, total, curFile) => {
+      const pct = Math.round((cur / total) * 100);
+      const fileName = curFile.split('/').pop() || curFile;
+      notice.setMessage(`📦 데이터 설치 중 (${pct}%): ${cur}/${total}\n${fileName}`);
+    });
+
+    notice.hide();
+    new Notice('✅ 성경, 원어(스트롱), 글꼴 데이터 설치가 완료되었습니다!\n(옵시디언을 재시작하면 모든 화면에 완전히 적용됩니다)', 8000);
+
+    try { smmClearHeaderFontCache(); plugin.updateMmStyleVars(); } catch (e) {}
+    try { plugin.refreshOpenStrongViews(); } catch (e) {}
+    return true;
+  } catch (err) {
+    notice.hide();
+    new Notice('❌ 데이터 설치 실패: ' + (err && err.message ? err.message : err), 8000);
+    return false;
   }
 }
 
@@ -10465,6 +14828,1038 @@ function smmBibleQuoteEnd(line, from, to) {
   if (!/^\s*(?:(?:[-*+]|\d+[.)])\s+(?:\[.\]\s+)?|>\s*|#{1,6}\s+)*$/.test(before)) return to;
   if (text.slice(to.ch).trim() === '') return to;
   return { line: to.line, ch: text.length };
+}
+
+/** 절 목록([Verse])의 절 번호들을 연속 구간은 '-', 비연속 구간은 ','로 묶어 표기 (예: 1,3,5 / 1-5 / 1-3,5) */
+function smmFormatVerseRefNums(verses) {
+  if (!verses || !verses.length) return '';
+  const nums = verses.map((v) => v.verse);
+  const parts = [];
+  let i = 0;
+  while (i < nums.length) {
+    let j = i;
+    while (j + 1 < nums.length && nums[j + 1] === nums[j] + 1) j++;
+    parts.push(j > i ? `${nums[i]}-${nums[j]}` : `${nums[i]}`);
+    i = j + 1;
+  }
+  return parts.join(',');
+}
+
+/** 절 지정 문자열(예: "1", "1-5", "1,3,5", "1-3, 5")을 절 번호 배열로 풀기 */
+function smmParseVerseSpec(specStr, chapterMap) {
+  if (!specStr || !String(specStr).trim()) {
+    let maxVerse = 1;
+    for (const vKey of chapterMap.keys()) {
+      if (vKey > maxVerse) maxVerse = vKey;
+    }
+    const all = [];
+    for (let v = 1; v <= maxVerse; v++) all.push(v);
+    return all;
+  }
+  const seen = new Set();
+  const out = [];
+  const parts = String(specStr).split(',');
+  for (const rawPart of parts) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    const rm = part.match(/^(\d+)\s*[-~–]\s*(\d+)$/);
+    if (rm) {
+      const a = parseInt(rm[1], 10);
+      const b = parseInt(rm[2], 10);
+      const s = Math.min(a, b), e = Math.max(a, b);
+      for (let v = s; v <= e; v++) {
+        if (!seen.has(v)) { seen.add(v); out.push(v); }
+      }
+    } else if (/^\d+$/.test(part)) {
+      const v = parseInt(part, 10);
+      if (!seen.has(v)) { seen.add(v); out.push(v); }
+    }
+  }
+  return out;
+}
+
+const SMM_BIBLE_BOOK_ALIASES = {
+  '창': '창', '창세': '창', '창세기': '창',
+  '출': '출', '출애': '출', '출애굽기': '출',
+  '레': '레', '레위': '레', '레위기': '레',
+  '민': '민', '민수': '민', '민수기': '민',
+  '신': '신', '신명': '신', '신명기': '신',
+  '수': '수', '여호': '수', '여': '수', '여호수아': '수',
+  '삿': '삿', '사사': '삿', '사사기': '삿',
+  '룻': '룻', '룻기': '룻',
+  '삼상': '삼상', '삼일': '삼상', '사무엘상': '삼상',
+  '삼하': '삼하', '삼이': '삼하', '사무엘하': '삼하',
+  '왕상': '왕상', '왕일': '왕상', '열왕기상': '왕상',
+  '왕하': '왕하', '왕이': '왕하', '열왕기하': '왕하',
+  '대상': '대상', '대일': '대상', '역대기상': '대상', '역대상': '대상',
+  '대하': '대하', '대이': '대하', '역대기하': '대하', '역대하': '대하',
+  '스': '스', '라': '스', '에스라': '스',
+  '느': '느', '느헤': '느', '느헤미야': '느',
+  '에': '에', '더': '에', '에스더': '에',
+  '욥': '욥', '욥기': '욥',
+  '시': '시', '시편': '시',
+  '잠': '잠', '잠언': '잠',
+  '전': '전', '전도': '전', '전도서': '전',
+  '아': '아', '아가': '아', '아가서': '아',
+  '사': '사', '이사': '사', '이사야': '사',
+  '렘': '렘', '예레': '렘', '예레미야': '렘',
+  '애': '애', '렘애': '애', '예레미야애가': '애',
+  '겔': '겔', '에스겔': '겔',
+  '단': '단', '다니': '단', '다니엘': '단',
+  '호': '호', '호세': '호', '호세아': '호',
+  '욜': '욜', '요엘': '욜',
+  '암': '암', '아모스': '암',
+  '옵': '옵', '오바': '옵', '오바댜': '옵',
+  '욘': '욘', '요나': '욘',
+  '미': '미', '미가': '미',
+  '나': '나', '나훔': '나',
+  '합': '합', '하박': '합', '하박국': '합',
+  '습': '습', '스바냐': '습',
+  '학': '학', '학개': '학',
+  '슥': '슥', '스가': '슥', '스가랴': '슥',
+  '말': '말', '말라': '말', '말라기': '말',
+  '마': '마', '마태': '마', '마태복음': '마',
+  '막': '막', '마가': '막', '마가복음': '막',
+  '눅': '눅', '누가': '눅', '누': '눅', '누가복음': '눅',
+  '요': '요', '요한': '요', '요한복음': '요',
+  '행': '행', '사도': '행', '사도행전': '행',
+  '롬': '롬', '로마': '롬', '로마서': '롬',
+  '고전': '고전', '고린도전': '고전', '고린도전서': '고전',
+  '고후': '고후', '고린도후': '고후', '고린도후서': '고후',
+  '갈': '갈', '갈라': '갈', '갈라디아서': '갈',
+  '엡': '엡', '에베': '엡', '에베소서': '엡',
+  '빌': '빌', '빌립': '빌', '빌립보서': '빌',
+  '골': '골', '골로': '골', '골로새서': '골',
+  '살전': '살전', '데살로니가전': '살전', '데살로니가전서': '살전',
+  '살후': '살후', '데살로니가후': '살후', '데살로니가후서': '살후',
+  '딤전': '딤전', '디모데전': '딤전', '디모데전서': '딤전',
+  '딤후': '딤후', '디모데후': '딤후', '디모데후서': '딤후',
+  '딛': '딛', '디도': '딛', '디도서': '딛',
+  '몬': '몬', '빌레': '몬', '빌레몬서': '몬',
+  '히': '히', '히브': '히', '히브리서': '히',
+  '약': '약', '야고': '약', '야고보서': '약',
+  '벧전': '벧전', '베드로전': '벧전', '베드로전서': '벧전',
+  '벧후': '벧후', '베드로후': '벧후', '베드로후서': '벧후',
+  '요일': '요일', '요한일': '요일', '요한1서': '요일', '요한일서': '요일',
+  '요이': '요이', '요한이': '요이', '요한2서': '요이', '요한이서': '요이',
+  '요삼': '요삼', '요한삼': '요삼', '요한3서': '요삼', '요한삼서': '요삼',
+  '유': '유', '유다': '유', '유다서': '유',
+  '계': '계', '계시': '계', '요한계시록': '계', 'cmd': '계',
+  'gn': '창', 'gen': '창', 'ex': '출', 'exo': '출', 'lv': '레', 'lev': '레',
+  'nm': '민', 'num': '민', 'dt': '신', 'deut': '신', 'js': '수', 'josh': '수',
+  'jg': '삿', 'judg': '삿', 'rt': '룻', 'ruth': '룻',
+  '1s': '삼상', '1sam': '삼상', '2s': '삼하', '2sam': '삼하',
+  '1k': '왕상', '1ki': '왕상', '2k': '왕하', '2ki': '왕하',
+  '1c': '대상', '1chr': '대상', '2c': '대하', '2chr': '대하',
+  'ez': '스', 'ezr': '스', 'ne': '느', 'neh': '느', 'es': '에', 'esth': '에',
+  'jb': '욥', 'job': '욥', 'ps': '시', 'psa': '시', 'pr': '잠', 'prov': '잠',
+  'ec': '전', 'eccl': '전', 'sg': '아', 'song': '아', 'is': '사', 'isa': '사',
+  'jr': '렘', 'jer': '렘', 'lm': '애', 'lam': '애', 'ek': '겔', 'eze': '겔',
+  'dn': '단', 'dan': '단', 'hs': '호', 'hos': '호', 'jl': '욜', 'joel': '욜',
+  'am': '암', 'amo': '암', 'ob': '옵', 'obad': '옵', 'jn': '욘', 'jonah': '욘',
+  'mi': '미', 'mic': '미', 'na': '나', 'nah': '나', 'hb': '합', 'hab': '합',
+  'zp': '습', 'zeph': '습', 'hg': '학', 'hag': '학', 'zc': '슥', 'zech': '슥',
+  'ml': '말', 'mal': '말', 'mt': '마', 'matt': '마', 'mk': '막', 'mark': '막',
+  'lk': '눅', 'luke': '눅', 'jo': '요', 'john': '요', 'ac': '행', 'acts': '행',
+  'ro': '롬', 'rom': '롬', '1co': '고전', '1cor': '고전', '2co': '고후', '2cor': '고후',
+  'ga': '갈', 'gal': '갈', 'ep': '엡', 'eph': '엡', 'ph': '빌', 'phil': '빌',
+  'col': '골', '1th': '살전', '1thess': '살전', '2th': '살후', '2thess': '살후',
+  '1ti': '딤전', '1tim': '딤전', '2ti': '딤후', '2tim': '딤후', 'tit': '딛',
+  'phm': '몬', 'philem': '몬', 'he': '히', 'heb': '히', 'jas': '약',
+  '1pe': '벧전', '1pet': '벧전', '2pe': '벧후', '2pet': '벧후',
+  '1jn': '요일', '1john': '요일', '2jn': '요이', '2john': '요이', '3jn': '요삼', '3john': '요삼',
+  'jud': '유', 'jude': '유', 're': '계', 'rev': '계',
+};
+
+function smmResolveBookCode(rawBook, bf) {
+  const t = String(rawBook || '').trim();
+  if (!t) return null;
+  const customMap = (bf && bf.customBookMap) || {};
+  if (customMap[t]) return customMap[t];
+  const noSpace = t.replace(/\s+/g, '');
+  if (SMM_BIBLE_BOOK_ALIASES[t]) return SMM_BIBLE_BOOK_ALIASES[t];
+  if (SMM_BIBLE_BOOK_ALIASES[noSpace]) return SMM_BIBLE_BOOK_ALIASES[noSpace];
+  const low = noSpace.toLowerCase();
+  if (SMM_BIBLE_BOOK_ALIASES[low]) return SMM_BIBLE_BOOK_ALIASES[low];
+  return null;
+}
+
+/** 현재 텍스트나 줄 안에 성경 장절 패턴이 포함되어 있는지 확인 */
+function smmHasBibleRefPattern(text, bf) {
+  if (!text || typeof text !== 'string') return false;
+  const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3}(?:\s*[-~–]\s*\d{1,3}|\s*,\s*\d{1,3})*))?(?:[\)\]\}>])?/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const code = smmResolveBookCode(match[1], bf);
+    if (code) return true;
+  }
+  return false;
+}
+
+/**
+ * 커서 위치나 선택 영역에 가장 적합한 성경 장절 매치를 반환 (선택 우선 -> 커서 위치 포함 -> 커서 앞쪽 -> 줄 내 첫 번째)
+ */
+function smmFindBestBibleRefMatch(lineText, cursorCh, selectionText, bf) {
+  const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3}(?:\s*[-~–]\s*\d{1,3}|\s*,\s*\d{1,3})*))?(?:[\)\]\}>])?/g;
+
+  // 1) 사용자가 직접 드래그한 선택 영역이 있다면 선택 영역에서 먼저 검색
+  if (selectionText && selectionText.trim()) {
+    let selMatch;
+    const selRx = new RegExp(regex.source, regex.flags);
+    while ((selMatch = selRx.exec(selectionText)) !== null) {
+      const code = smmResolveBookCode(selMatch[1], bf);
+      if (code) return { match: selMatch, code, inSelection: true };
+    }
+  }
+
+  // 2) 줄 전체에서 모든 유효 성경 장절 매치 검색
+  const allMatches = [];
+  let m;
+  const lineRx = new RegExp(regex.source, regex.flags);
+  while ((m = lineRx.exec(lineText)) !== null) {
+    const code = smmResolveBookCode(m[1], bf);
+    if (code) allMatches.push({ match: m, code, inSelection: false });
+  }
+  if (allMatches.length === 0) return null;
+
+  // 3) 커서가 매치 범위 안([start, end])에 걸쳐 있는 것 최우선
+  for (const item of allMatches) {
+    const start = item.match.index;
+    const end = start + item.match[0].length;
+    if (cursorCh >= start && cursorCh <= end) {
+      return item;
+    }
+  }
+
+  // 4) 커서 앞쪽에 있는 매치 중 가장 가까운 것
+  const beforeMatches = allMatches.filter(item => item.match.index <= cursorCh);
+  if (beforeMatches.length > 0) {
+    return beforeMatches[beforeMatches.length - 1];
+  }
+
+  // 5) 커서가 줄 맨 앞이거나 앞에 장절이 없으면 줄 내의 첫 번째 장절 선택
+  return allMatches[0];
+}
+
+/**
+ * 공백 없는 성경책+장(예: 겔1:1, 겔37:1) 및 쉼표(,) 절 지정(예: 창 1:1,3,5), 
+ * 커서 앞/뒤/단어내/선택영역 어디서든 정확히 성경 구절을 치환하는 향상된 치환기.
+ */
+function smmEnhancedReplaceBibleLink(bf, editor) {
+  try {
+    if (!bf || typeof bf.getActiveVersion !== 'function' || typeof bf.assembleVerses !== 'function') return false;
+    const cursor = editor.getCursor();
+    const lineText = editor.getLine(cursor.line);
+    const sel = editor.getSelection ? editor.getSelection() : '';
+
+    const found = smmFindBestBibleRefMatch(lineText, cursor.ch, sel, bf);
+    if (!found) return false;
+
+    const m = found.match;
+    const standardBook = found.code;
+    const fullMatchText = m[0];
+    const rawBook = m[1];
+    const chapter = parseInt(m[2], 10);
+    const verseSpec = m[3];
+
+    const activeVersion = bf.getActiveVersion();
+    if (!activeVersion) {
+      new Notice('활성화된 성경 데이터가 없습니다. 설정에서 btx 파일 폴더를 확인해 주세요.');
+      return true;
+    }
+    const bookMap = activeVersion.index.get(standardBook);
+    if (!bookMap) {
+      new Notice(`성경책명 '${rawBook}'에 해당하는 데이터를 찾을 수 없습니다.`);
+      return true;
+    }
+    const chapterMap = bookMap.get(chapter);
+    if (!chapterMap) {
+      new Notice(`해당 성경에 ${chapter}장이 없습니다.`);
+      return true;
+    }
+    const targetNums = smmParseVerseSpec(verseSpec, chapterMap);
+    const matchedVerses = [];
+    for (const v of targetNums) {
+      const verseObj = chapterMap.get(v);
+      if (verseObj) matchedVerses.push(verseObj);
+    }
+    if (matchedVerses.length === 0) {
+      new Notice(`${chapter}장 ${verseSpec || ''} 구절을 찾을 수 없습니다.`);
+      return true;
+    }
+    const replacementText = bf.assembleVerses(matchedVerses, true);
+
+    if (found.inSelection) {
+      editor.replaceSelection(replacementText);
+    } else {
+      const startCh = m.index;
+      const endCh = m.index + fullMatchText.length;
+      editor.replaceRange(replacementText, { line: cursor.line, ch: startCh }, { line: cursor.line, ch: endCh });
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/* ================= AI 이미지 텍스트 변환 (OCR / Google Gemini) ================= */
+
+const SMM_DEFAULT_OCR_PROMPT =
+  '이미지에 담긴 글자를 빠짐없이 정확한 마크다운(Markdown) 텍스트로 변환해 주세요.\n' +
+  '- 책, 설교 교재, 성경 주석, 인용문 등의 구조(대제목, 번호 목록, 문단)를 자연스럽게 살려 주세요.\n' +
+  '- 성경 장절 표기(예: (창 1:1), (신 4:27, 30), (눅 21:24) 등)와 인용 부호(「」, \"\", \'\')는 원본 형태를 정확히 유지해 주세요.\n' +
+  '- 원본의 오탈자나 명조체 특유의 받침 깨짐이 없도록 한국어 문맥에 맞게 정확한 철자로 전사해 주세요.\n' +
+  '- 부가적인 설명이나 인사말, 코드블록(```markdown 등) 없이 순수 마크다운 텍스트 본문만 바로 출력해 주세요.';
+
+/** Uint8Array 바이트 배열을 Base64 문자열로 변환 (모바일/데스크톱 공용) */
+function smmBytesToBase64(bytes) {
+  let binary = '';
+  const len = bytes.byteLength;
+  const chunk = 0x8000;
+  for (let i = 0; i < len; i += chunk) {
+    const sub = bytes.subarray(i, Math.min(i + chunk, len));
+    binary += String.fromCharCode.apply(null, sub);
+  }
+  return btoa(binary);
+}
+
+/** Gemini API 연결 상태 테스트 */
+async function smmTestGeminiApi(apiKey) {
+  const models = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest'];
+  let lastMsg = '';
+  for (const model of models) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const body = {
+      contents: [
+        {
+          parts: [{ text: 'Respond with "OK" if this connection test is successful.' }]
+        }
+      ]
+    };
+    try {
+      const resp = await obsidian.requestUrl({
+        url,
+        method: 'POST',
+        contentType: 'application/json',
+        body: JSON.stringify(body),
+        throw: false
+      });
+      if (resp.status >= 200 && resp.status < 300) {
+        return { ok: true, model };
+      }
+      try {
+        const json = JSON.parse(resp.text);
+        if (json.error && json.error.message) lastMsg = json.error.message;
+      } catch (e) {
+        lastMsg = `HTTP ${resp.status}`;
+      }
+    } catch (err) {
+      lastMsg = err && err.message ? err.message : String(err);
+    }
+  }
+  return { ok: false, error: lastMsg };
+}
+
+/** 이미지 바이트 데이터를 Google Gemini 모델로 전송하여 마크다운 텍스트 추출 */
+async function smmPerformGeminiOcr(apiKey, imageBytes, mimeType, customPrompt) {
+  const cleanKey = String(apiKey || '').trim();
+  if (!cleanKey) {
+    throw new Error('Gemini API 키가 설정되지 않았습니다. [설교 마인드맵 설정]에서 API 키를 입력해 주세요.');
+  }
+
+  const promptText = String(customPrompt || '').trim() || SMM_DEFAULT_OCR_PROMPT;
+  const b64Data = smmBytesToBase64(imageBytes);
+
+  // 최신 지원 모델 순차 시도 (무료 티어 할당량이 가장 높은 flash-lite 우선)
+  const models = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest'];
+  let lastErr = null;
+
+  for (const model of models) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+    const payload = {
+      contents: [
+        {
+          parts: [
+            { text: promptText },
+            {
+              inline_data: {
+                mime_type: mimeType || 'image/jpeg',
+                data: b64Data
+              }
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 8192
+      }
+    };
+
+    try {
+      const resp = await obsidian.requestUrl({
+        url,
+        method: 'POST',
+        contentType: 'application/json',
+        body: JSON.stringify(payload),
+        throw: false
+      });
+
+      if (resp.status >= 200 && resp.status < 300) {
+        const resJson = JSON.parse(resp.text);
+        const candidates = resJson.candidates || [];
+        if (!candidates.length || !candidates[0].content || !candidates[0].content.parts) {
+          throw new Error('Gemini 모델에서 텍스트 응답을 받지 못했습니다.');
+        }
+        let outText = candidates[0].content.parts.map((p) => p.text || '').join('');
+        // 앞뒤 코드블록 태그(```markdown ... ```)가 감싸져 있다면 제거
+        outText = outText.replace(/^```(?:markdown)?\s*\r?\n/i, '').replace(/\r?\n```\s*$/i, '');
+        return outText.trim();
+      } else {
+        let msg = `HTTP ${resp.status}`;
+        try {
+          const errData = JSON.parse(resp.text);
+          if (errData.error && errData.error.message) msg = errData.error.message;
+        } catch (e) {}
+        lastErr = new Error(`${model} 변환 실패: ${msg}`);
+      }
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  throw lastErr || new Error('이미지 텍스트 변환에 실패했습니다.');
+}
+
+/** 파일 경로/이름에서 이미지 MIME 타입 판별 */
+function smmMimeTypeForPath(path) {
+  const lower = String(path || '').toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.bmp')) return 'image/bmp';
+  return 'image/jpeg';
+}
+
+/** 줄 안에서 이미지 링크 매칭 (![[...]] 또는 ![](...) */
+function smmFindImageMatchInLine(lineText, ch) {
+  const wikiRe = /!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
+  let m;
+  while ((m = wikiRe.exec(lineText)) !== null) {
+    const start = m.index;
+    const end = m.index + m[0].length;
+    if (ch == null || (ch >= start && ch <= end) || (wikiRe.lastIndex === lineText.length)) {
+      return { full: m[0], path: m[1].trim(), start, end };
+    }
+  }
+  const mdRe = /!\[[^\]]*\]\(([^)]+)\)/g;
+  while ((m = mdRe.exec(lineText)) !== null) {
+    const start = m.index;
+    const end = m.index + m[0].length;
+    if (ch == null || (ch >= start && ch <= end) || (mdRe.lastIndex === lineText.length)) {
+      return { full: m[0], path: m[1].trim(), start, end };
+    }
+  }
+  return null;
+}
+
+/** 에디터 현재 줄의 이미지 링크를 감지하여 AI 텍스트 변환 후 교체 */
+async function smmOcrImageAtCursor(plugin, editor) {
+  const cursor = editor.getCursor();
+  const lineText = editor.getLine(cursor.line);
+  const found = smmFindImageMatchInLine(lineText, cursor.ch);
+
+  if (!found) {
+    new obsidian.Notice('현재 줄에서 이미지 링크(![[이미지]] 또는 ![](경로))를 찾지 못했습니다.');
+    return;
+  }
+
+  const rawPath = found.path;
+  const vault = plugin.app.vault;
+  let tfile = plugin.app.metadataCache.getFirstLinkpathDest(rawPath, '');
+  if (!tfile) {
+    // metadataCache에서 못 찾은 경우 직접 파일 탐색
+    tfile = vault.getAbstractFileByPath(rawPath);
+    if (!tfile) {
+      const allFiles = vault.getFiles();
+      const normName = rawPath.split('/').pop().toLowerCase();
+      tfile = allFiles.find((f) => f.name.toLowerCase() === normName);
+    }
+  }
+
+  if (!tfile) {
+    new obsidian.Notice(`볼트에서 이미지 파일을 찾을 수 없습니다: ${rawPath}`);
+    return;
+  }
+
+  const notice = new obsidian.Notice(`🔍 [AI OCR] "${tfile.name}" 텍스트 추출 중...`, 0);
+  try {
+    const bytes = new Uint8Array(await vault.readBinary(tfile));
+    const mime = smmMimeTypeForPath(tfile.name);
+    const apiKey = plugin.settings.geminiApiKey;
+    const prompt = plugin.settings.ocrPrompt;
+
+    const resultText = await smmPerformGeminiOcr(apiKey, bytes, mime, prompt);
+    notice.hide();
+
+    editor.replaceRange(
+      resultText,
+      { line: cursor.line, ch: found.start },
+      { line: cursor.line, ch: found.end }
+    );
+    new obsidian.Notice('✅ 이미지 텍스트 변환 완료!');
+  } catch (err) {
+    notice.hide();
+    new obsidian.Notice('❌ OCR 변환 오류: ' + (err && err.message ? err.message : err), 8000);
+  }
+}
+
+/** 이미지 파일 자체를 우클릭했을 때(file-menu) 해당 이미지 텍스트 변환 및 에디터 치환 */
+async function smmOcrSpecificFile(plugin, tfile) {
+  if (!tfile) return;
+  const vault = plugin.app.vault;
+  const notice = new obsidian.Notice(`🔍 [AI OCR] "${tfile.name}" 텍스트 추출 중...`, 0);
+
+  try {
+    const bytes = new Uint8Array(await vault.readBinary(tfile));
+    const mime = smmMimeTypeForPath(tfile.name);
+    const apiKey = plugin.settings.geminiApiKey;
+    const prompt = plugin.settings.ocrPrompt;
+
+    const resultText = await smmPerformGeminiOcr(apiKey, bytes, mime, prompt);
+    notice.hide();
+
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const n = esc(tfile.name);
+    const b = esc(tfile.basename);
+    let u = '';
+    try { u = esc(encodeURIComponent(tfile.name)); } catch (e) {}
+    const uPart = u && u !== n ? '|' + u : '';
+    const linkRegex = new RegExp(
+      '(!\\[\\[(?:[^\\]]*[\\/\\\\])?(?:' + n + '|' + b + ')(?:\\|[^\\]]*)?\\]\\]' +
+      '|' +
+      '!\\[[^\\]]*\\]\\((?:<[^>]+>|[^)]+)?(?:' + n + '|' + b + uPart + ')[^)]*\\))',
+      'g'
+    );
+
+    // 1) 현재 열려 있는 마크다운 뷰 중 이 이미지 링크를 가지고 있는 문서를 탐색
+    let targetMdView = null;
+    let targetEditor = null;
+    const mdLeaves = plugin.app.workspace.getLeavesOfType('markdown');
+
+    for (const leaf of mdLeaves) {
+      const v = leaf.view;
+      if (v && v.editor) {
+        const text = v.editor.getValue();
+        linkRegex.lastIndex = 0;
+        if (linkRegex.test(text)) {
+          targetMdView = v;
+          targetEditor = v.editor;
+          plugin.app.workspace.setActiveLeaf(leaf, { focus: true });
+          break;
+        }
+      }
+    }
+
+    // 2) 못 찾았으면 현재 활성 뷰 확인
+    if (!targetEditor) {
+      const activeV = plugin.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+      if (activeV && activeV.editor) {
+        targetEditor = activeV.editor;
+      }
+    }
+
+    if (targetEditor) {
+      const docText = targetEditor.getValue();
+      linkRegex.lastIndex = 0;
+      const m = linkRegex.exec(docText);
+      if (m) {
+        const fromPos = targetEditor.offsetToPos(m.index);
+        const toPos = targetEditor.offsetToPos(m.index + m[0].length);
+        targetEditor.replaceRange(resultText, fromPos, toPos);
+      } else {
+        targetEditor.replaceSelection(resultText);
+      }
+      new obsidian.Notice('✅ 이미지 텍스트 변환 완료!');
+    } else {
+      // 에디터를 아예 못 찾은 경우 볼트 전체 파일 중 해당 이미지를 참조하는 md 파일을 직접 수정
+      const allFiles = vault.getMarkdownFiles();
+      let modifiedFile = null;
+      for (const mf of allFiles) {
+        const content = await vault.read(mf);
+        linkRegex.lastIndex = 0;
+        if (linkRegex.test(content)) {
+          linkRegex.lastIndex = 0;
+          const newContent = content.replace(linkRegex, resultText);
+          await vault.modify(mf, newContent);
+          modifiedFile = mf;
+          break;
+        }
+      }
+      if (modifiedFile) {
+        new obsidian.Notice(`✅ "${modifiedFile.basename}" 노트 안의 이미지를 텍스트로 치환했습니다!`);
+      } else {
+        await navigator.clipboard.writeText(resultText);
+        new obsidian.Notice('✅ 텍스트 추출 완료! (클립보드에 복사되었습니다)');
+      }
+    }
+  } catch (err) {
+    notice.hide();
+    new obsidian.Notice('❌ OCR 변환 오류: ' + (err && err.message ? err.message : err), 8000);
+  }
+}
+
+/* =========================================================================================
+ * 설교 서식 변환 헬퍼 (0단계: 옵시디언 명령어 체계화)
+ * 워드(.docx), 마인드맵, 읽기 화면과 100% 호환되는 마크다운 문법만을 사용하며,
+ * 에디터 선택 영역 유지, 아이패드 포커스 유지, 단일 트랜잭션 Undo를 보장합니다.
+ * ========================================================================================= */
+
+const SMM_CMD_HL_MAP = {
+  yellow: { emoji: '', name: '노랑 (기본)' },
+  red:    { emoji: '🔴 ', name: '빨강' },
+  orange: { emoji: '🟠 ', name: '주황' },
+  green:  { emoji: '🟢 ', name: '초록' },
+  blue:   { emoji: '🔵 ', name: '파랑' },
+  purple: { emoji: '🟣 ', name: '보라' },
+};
+
+const SMM_CMD_EMOJI_TO_KEY = {
+  '\u{1F534}': 'red',
+  '\u{1F7E0}': 'orange',
+  '\u{1F7E1}': 'yellow',
+  '\u{1F7E2}': 'green',
+  '\u{1F535}': 'blue',
+  '\u{1F7E3}': 'purple',
+};
+
+function smmAnalyzeHighlightText(text) {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('==') && trimmed.endsWith('==') && trimmed.length >= 4) {
+    const inner = trimmed.slice(2, -2).trim();
+    const em = inner.match(SMM_HL_EMOJI_RE);
+    if (em) {
+      const key = SMM_CMD_EMOJI_TO_KEY[em[1]] || 'yellow';
+      return { isHl: true, colorKey: key, content: inner.slice(em[0].length) };
+    }
+    return { isHl: true, colorKey: 'yellow', content: inner };
+  }
+  return { isHl: false, colorKey: null, content: text };
+}
+
+function smmTransformHighlightText(text, targetColorKey) {
+  const info = smmAnalyzeHighlightText(text);
+  if (targetColorKey === 'clear') {
+    return info.isHl ? info.content : text;
+  }
+  if (info.isHl) {
+    if (info.colorKey === targetColorKey) {
+      return info.content; // 토글 해제
+    } else {
+      const prefix = SMM_CMD_HL_MAP[targetColorKey] ? SMM_CMD_HL_MAP[targetColorKey].emoji : '';
+      return `==${prefix}${info.content}==`; // 색상 교체
+    }
+  } else {
+    const prefix = SMM_CMD_HL_MAP[targetColorKey] ? SMM_CMD_HL_MAP[targetColorKey].emoji : '';
+    return `==${prefix}${text}==`; // 새로 감싸기
+  }
+}
+
+function smmToggleHighlight(editor, targetColorKey) {
+  if (!editor) return;
+  const from = editor.getCursor('from');
+  const to = editor.getCursor('to');
+  const sel = editor.getSelection();
+
+  if (sel) {
+    // 1) 선택된 텍스트 자체가 ==...== 인 경우
+    const info = smmAnalyzeHighlightText(sel);
+    if (info.isHl) {
+      const rep = smmTransformHighlightText(sel, targetColorKey);
+      editor.replaceSelection(rep);
+      return;
+    }
+
+    // 2) 선택된 영역 바로 바깥이 ==...== 인 경우 (안쪽 알맹이만 드래그한 경우)
+    if (from.line === to.line) {
+      const lineText = editor.getLine(from.line);
+      if (from.ch >= 2 && to.ch + 2 <= lineText.length) {
+        const b2 = lineText.slice(from.ch - 2, from.ch);
+        const a2 = lineText.slice(to.ch, to.ch + 2);
+        if (b2 === '==' && a2 === '==') {
+          const fullText = editor.getRange({ line: from.line, ch: from.ch - 2 }, { line: to.line, ch: to.ch + 2 });
+          const fullInfo = smmAnalyzeHighlightText(fullText);
+          if (fullInfo.isHl) {
+            const rep = smmTransformHighlightText(fullText, targetColorKey);
+            editor.replaceRange(rep, { line: from.line, ch: from.ch - 2 }, { line: to.line, ch: to.ch + 2 });
+            return;
+          }
+        }
+      }
+    }
+
+    // 3) 앞뒤 공백 보존
+    const leadingWs = sel.match(/^[ \t\r\n]*/)[0];
+    const trailingWs = sel.match(/[ \t\r\n]*$/)[0];
+    const core = sel.slice(leadingWs.length, sel.length - trailingWs.length);
+    if (!core) return;
+
+    const rep = leadingWs + smmTransformHighlightText(core, targetColorKey) + trailingWs;
+    editor.replaceSelection(rep);
+    return;
+  }
+
+  // 선택 영역 없음 (커서 위치)
+  const cur = editor.getCursor();
+  const line = editor.getLine(cur.line);
+
+  // 커서가 ==...== 안에 있는지 검사
+  const hlRegex = /==[^=\n]+==/g;
+  let match;
+  let foundRange = null;
+  while ((match = hlRegex.exec(line)) !== null) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (cur.ch >= start && cur.ch <= end) {
+      foundRange = { start, end, text: match[0] };
+      break;
+    }
+  }
+
+  if (foundRange) {
+    const rep = smmTransformHighlightText(foundRange.text, targetColorKey);
+    editor.replaceRange(rep, { line: cur.line, ch: foundRange.start }, { line: cur.line, ch: foundRange.end });
+    return;
+  }
+
+  // 커서 위치의 단어 찾기
+  if (typeof editor.wordAt === 'function') {
+    const w = editor.wordAt(cur);
+    if (w && w.from && w.to && (w.to.ch > w.from.ch)) {
+      const word = editor.getRange(w.from, w.to);
+      const rep = smmTransformHighlightText(word, targetColorKey);
+      editor.replaceRange(rep, w.from, w.to);
+      return;
+    }
+  }
+
+  // 단어도 없으면 빈 하이라이트 삽입 후 가운데에 커서 배치
+  if (targetColorKey === 'clear') return;
+  const emoji = SMM_CMD_HL_MAP[targetColorKey] ? SMM_CMD_HL_MAP[targetColorKey].emoji : '';
+  const insert = `==${emoji}==`;
+  editor.replaceRange(insert, cur);
+  editor.setCursor({ line: cur.line, ch: cur.ch + 2 + emoji.length });
+}
+
+function smmToggleInlineWrapper(editor, type) {
+  if (!editor) return;
+  const pairs = {
+    bold: { open: '**', close: '**' },
+    underline: { open: '<u>', close: '</u>' },
+    strike: { open: '~~', close: '~~' },
+  };
+  const cfg = pairs[type];
+  if (!cfg) return;
+
+  const from = editor.getCursor('from');
+  const to = editor.getCursor('to');
+  const sel = editor.getSelection();
+
+  if (sel) {
+    const leadingWs = sel.match(/^[ \t\r\n]*/)[0];
+    const trailingWs = sel.match(/[ \t\r\n]*$/)[0];
+    const core = sel.slice(leadingWs.length, sel.length - trailingWs.length);
+    if (!core) return;
+
+    if (core.startsWith(cfg.open) && core.endsWith(cfg.close) && core.length >= (cfg.open.length + cfg.close.length)) {
+      const inner = core.slice(cfg.open.length, -cfg.close.length);
+      editor.replaceSelection(leadingWs + inner + trailingWs);
+      return;
+    }
+
+    if (from.line === to.line) {
+      const lineText = editor.getLine(from.line);
+      const olen = cfg.open.length;
+      const clen = cfg.close.length;
+      if (from.ch >= olen && to.ch + clen <= lineText.length) {
+        const b = lineText.slice(from.ch - olen, from.ch);
+        const a = lineText.slice(to.ch, to.ch + clen);
+        if (b === cfg.open && a === cfg.close) {
+          editor.replaceRange(core, { line: from.line, ch: from.ch - olen }, { line: to.line, ch: to.ch + clen });
+          return;
+        }
+      }
+    }
+
+    editor.replaceSelection(leadingWs + cfg.open + core + cfg.close + trailingWs);
+    return;
+  }
+
+  const cur = editor.getCursor();
+  if (typeof editor.wordAt === 'function') {
+    const w = editor.wordAt(cur);
+    if (w && w.from && w.to && (w.to.ch > w.from.ch)) {
+      const word = editor.getRange(w.from, w.to);
+      if (word.startsWith(cfg.open) && word.endsWith(cfg.close) && word.length >= (cfg.open.length + cfg.close.length)) {
+        editor.replaceRange(word.slice(cfg.open.length, -cfg.close.length), w.from, w.to);
+      } else {
+        editor.replaceRange(cfg.open + word + cfg.close, w.from, w.to);
+      }
+      return;
+    }
+  }
+
+  editor.replaceRange(cfg.open + cfg.close, cur);
+  editor.setCursor({ line: cur.line, ch: cur.ch + cfg.open.length });
+}
+
+function smmTransformSelectedLines(editor, lineTransformFn) {
+  if (!editor) return;
+  const from = editor.getCursor('from');
+  const to = editor.getCursor('to');
+  const startLine = from.line;
+  const endLine = (to.ch === 0 && to.line > from.line) ? to.line - 1 : to.line;
+
+  const oldLines = [];
+  const newLines = [];
+  for (let l = startLine; l <= endLine; l++) {
+    const text = editor.getLine(l);
+    oldLines.push(text);
+    newLines.push(lineTransformFn(text));
+  }
+
+  const rangeStart = { line: startLine, ch: 0 };
+  const rangeEnd = { line: endLine, ch: oldLines[oldLines.length - 1].length };
+  editor.replaceRange(newLines.join('\n'), rangeStart, rangeEnd);
+}
+
+const SMM_CYCLE_MARKS = ['●', '■', '◆', '▶', '★', '※'];
+
+function smmCycleLineMark(line, cfg) {
+  const explicit = smmParseExplicitMarkLine(line);
+  if (!explicit) {
+    const ws = (line.match(/^[ \t]*/) || [''])[0];
+    const text = line.slice(ws.length);
+    if (!text.trim()) return line;
+    return ws + SMM_CYCLE_MARKS[0] + ' ' + text;
+  }
+  const idx = SMM_CYCLE_MARKS.indexOf(explicit.mark);
+  if (idx === -1) {
+    return explicit.indent + SMM_CYCLE_MARKS[0] + ' ' + explicit.body;
+  }
+  if (idx + 1 < SMM_CYCLE_MARKS.length) {
+    return explicit.indent + SMM_CYCLE_MARKS[idx + 1] + ' ' + explicit.body;
+  }
+  return explicit.indent + explicit.body;
+}
+
+function smmStripOutlineOrExplicitMark(line) {
+  const explicit = smmParseExplicitMarkLine(line);
+  if (explicit) return { indent: explicit.indent, body: explicit.body, hadExplicit: true, prevMark: explicit.mark };
+  const ws = (String(line || '').match(/^[ \t]*/) || [''])[0];
+  const rest = String(line || '').slice(ws.length);
+  const om = smmParseOutlinePrefix(rest);
+  if (om) return { indent: ws, body: om.body, hadOutline: true, prevMark: om.mark };
+  return { indent: ws, body: rest, hadExplicit: false, hadOutline: false, prevMark: null };
+}
+
+function smmSetLineMark(line, targetMark) {
+  const stripped = smmStripOutlineOrExplicitMark(line);
+  if (!stripped.body.trim()) return line;
+  if (!targetMark || stripped.prevMark === targetMark) {
+    return stripped.indent + stripped.body;
+  }
+  return stripped.indent + targetMark + ' ' + stripped.body;
+}
+
+function smmApplyOutlineMarksToLines(allLines, startLine, endLine, styleId) {
+  const out = allLines.slice();
+  const s = Math.max(0, startLine);
+  const e = Math.min(out.length - 1, endLine);
+  const styleMeta = styleId ? SMM_OUTLINE_STYLES.find((x) => x.id === styleId) : null;
+  const isEligible = (ln) => {
+    const t = String(ln || '').trim();
+    if (!t) return false;
+    if (/^(?:#{1,6}\s|>|```|~~~|\||---+\s*$)/.test(t)) return false;
+    return true;
+  };
+  const eligibleIdxs = [];
+  for (let i = s; i <= e; i++) {
+    if (isEligible(out[i])) eligibleIdxs.push(i);
+  }
+  if (eligibleIdxs.length === 0) return out;
+
+  if (!styleMeta) {
+    for (const idx of eligibleIdxs) {
+      const stripped = smmStripOutlineOrExplicitMark(out[idx]);
+      out[idx] = stripped.indent + stripped.body;
+    }
+    return out;
+  }
+
+  let nextOrd = 1;
+  if (eligibleIdxs.length === 1) {
+    const targetIdx = eligibleIdxs[0];
+    const ws = (String(out[targetIdx] || '').match(/^[ \t]*/) || [''])[0];
+    for (let k = targetIdx - 1; k >= 0; k--) {
+      const prev = String(out[k] || '');
+      const pt = prev.trim();
+      if (!pt) continue;
+      if (/^(?:#{1,6}\s|```|~~~)/.test(pt)) break;
+      const pws = (prev.match(/^[ \t]*/) || [''])[0];
+      if (pws !== ws) continue;
+      const em = smmParseExplicitMarkLine(prev);
+      if (em && em.family === styleId && em.ordinal) {
+        nextOrd = em.ordinal + 1;
+        break;
+      }
+      const om = !em ? smmParseOutlinePrefix(prev.slice(pws.length)) : null;
+      if (om && om.family === styleId && om.ordinal) {
+        nextOrd = om.ordinal + 1;
+        break;
+      }
+    }
+  }
+
+  for (let n = 0; n < eligibleIdxs.length; n++) {
+    const idx = eligibleIdxs[n];
+    const stripped = smmStripOutlineOrExplicitMark(out[idx]);
+    const cleanBody = stripped.body.replace(/^(?:\d{1,2}[.)]|[-*+])[ \t]+/, '');
+    if (!cleanBody.trim()) continue;
+    const token = smmFormatOutlineToken(styleId, eligibleIdxs.length === 1 ? nextOrd : n + 1);
+    const prefix = (styleMeta.explicitPrefix || '') + token + ' ';
+    out[idx] = stripped.indent + prefix + cleanBody;
+  }
+  return out;
+}
+
+function smmCycleNodeShade(line, color) {
+  const m = line.match(SMM_SHADE_RE);
+  const cleanLine = line.replace(SMM_SHADE_RE, '');
+  if (!m) {
+    return cleanLine + ` %%shade:${color}1%%`;
+  }
+  const curColor = m[1];
+  const curLevel = parseInt(m[2], 10);
+  if (curColor !== color) {
+    return cleanLine + ` %%shade:${color}1%%`;
+  }
+  if (curLevel < 3) {
+    return cleanLine + ` %%shade:${color}${curLevel + 1}%%`;
+  }
+  return cleanLine;
+}
+
+function smmClearNodeShade(line) {
+  return line.replace(SMM_SHADE_RE, '');
+}
+
+const SMM_CMD_HEADING_RE = /^([ \t]*)(#{1,6})[ \t]+(.*)$/;
+
+function smmCycleHeading(line) {
+  const m = line.match(SMM_CMD_HEADING_RE);
+  if (!m) {
+    const indent = line.match(/^[ \t]*/)[0];
+    const text = line.slice(indent.length);
+    if (!text.trim()) return line;
+    return `${indent}# ${text}`;
+  }
+  const [, indent, hashes, text] = m;
+  const level = hashes.length;
+  if (level < 3) {
+    return `${indent}${'#'.repeat(level + 1)} ${text}`;
+  }
+  return `${indent}${text}`;
+}
+
+function smmPromoteHeading(line) {
+  const m = line.match(SMM_CMD_HEADING_RE);
+  if (!m) {
+    const indent = line.match(/^[ \t]*/)[0];
+    const text = line.slice(indent.length);
+    if (!text.trim()) return line;
+    return `${indent}### ${text}`;
+  }
+  const [, indent, hashes, text] = m;
+  if (hashes.length > 1) {
+    return `${indent}${'#'.repeat(hashes.length - 1)} ${text}`;
+  }
+  return line;
+}
+
+function smmDemoteHeading(line) {
+  const m = line.match(SMM_CMD_HEADING_RE);
+  if (!m) return line;
+  const [, indent, hashes, text] = m;
+  if (hashes.length < 3) {
+    return `${indent}${'#'.repeat(hashes.length + 1)} ${text}`;
+  }
+  return `${indent}${text}`;
+}
+
+const SMM_CMD_QUOTE_RE = /^([ \t]*)>[ \t]?(.*)$/;
+
+function smmToggleQuote(line) {
+  const m = line.match(SMM_CMD_QUOTE_RE);
+  if (m) {
+    return `${m[1]}${m[2]}`;
+  }
+  const indent = line.match(/^[ \t]*/)[0];
+  const text = line.slice(indent.length);
+  if (!text.trim()) return line;
+  return `${indent}> ${text}`;
+}
+async function smmOcrClipboardImage(plugin, editor) {
+  if (!navigator.clipboard || !navigator.clipboard.read) {
+    new obsidian.Notice('이 환경에서는 클립보드 이미지 읽기를 지원하지 않습니다.');
+    return;
+  }
+
+  const apiKey = plugin.settings.geminiApiKey;
+  if (!apiKey) {
+    new obsidian.Notice('Gemini API 키가 필요합니다. [설교 마인드맵 설정]에서 입력해 주세요.');
+    return;
+  }
+
+  let imageBlob = null;
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      for (const type of item.types) {
+        if (type.startsWith('image/')) {
+          imageBlob = await item.getType(type);
+          break;
+        }
+      }
+      if (imageBlob) break;
+    }
+  } catch (err) {
+    new obsidian.Notice('클립보드 접근 권한이 없거나 이미지를 읽지 못했습니다: ' + (err && err.message ? err.message : err));
+    return;
+  }
+
+  if (!imageBlob) {
+    new obsidian.Notice('클립보드에 복사된 이미지가 없습니다. (스크린샷 캡처 후 다시 시도해 주세요)');
+    return;
+  }
+
+  const notice = new obsidian.Notice('🔍 [AI OCR] 클립보드 이미지 텍스트 추출 중...', 0);
+  try {
+    const arrayBuffer = await imageBlob.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    const mime = imageBlob.type || 'image/png';
+    const prompt = plugin.settings.ocrPrompt;
+
+    const resultText = await smmPerformGeminiOcr(apiKey, bytes, mime, prompt);
+    notice.hide();
+
+    editor.replaceSelection(resultText);
+    new obsidian.Notice('✅ 클립보드 이미지 텍스트 변환 완료!');
+  } catch (err) {
+    notice.hide();
+    new obsidian.Notice('❌ OCR 변환 오류: ' + (err && err.message ? err.message : err), 8000);
+  }
 }
 
 /* ================= 한자 변환 (한글 단어 → 한자) =================
@@ -11044,4 +16439,4 @@ const SMM_HANJA_GZ_B64 = 'H4sIAAAAAAACA2R96VbySrD2b89V5FIBQcIkoIwyy4ygzIMCXoxk2u
 
 module.exports = SermonMindmapPlugin;
 module.exports.default = SermonMindmapPlugin;
-module.exports.__test = { smmNormalizeColorMarks, smmFixColorMarks, smmBuildColorHighlightExtension, smmEnsureHlStyle, buildManuscriptDocx, smmReadFontFileInfo, smmObfuscateFont, smmSplitFontWeight, smrPreserveLineBreaks, smmMarkGap, smmDocxFonts, parseDoc, sectionEndLine, renderInline, indentWidth, linePrefix, childTemplate, descCount, insertPlan, movePlan, indentUnit, swapPlan, collapseBlankRuns, buildManuscriptDocx, parseInlineRuns, isVerseLine, sqliteReadTable, smmReadFontFamilyNames, smmListSystemFonts, smmDedupeVerseLines, smmIsVerseEditorLine, smmHanjaLoad, smmHanjaCands, smmHanjaSegments, smmHanjaSyllableSegments, smmHanjaApply, smmInflateGzip, smmB64ToBytes, smmMatchHotkey, SmmHanjaPicker, smmHanjaCollectPieces, SermonMindmapView, smmBibleQuoteEnd, smmCountText, smmCountNarrow, smmCountParseNative, smmCountCombos };
+module.exports.__test = { smmParseExplicitMarkLine, smmParseOutlinePrefix, smmIsStrongMark, smmIsWideMark, smmFormatOutlineToken, smmApplyOutlineMarksToLines, smmClassifyLineMarks, smmHangCharsFor, smmSetLineParagraphType, smmNormalizeColorMarks, smmFixColorMarks, smmBuildColorHighlightExtension, smmEnsureHlStyle, buildManuscriptDocx, smmReadFontFileInfo, smmObfuscateFont, smmSplitFontWeight, smrPreserveLineBreaks, smmMarkGap, smmDocxFonts, parseDoc, sectionEndLine, renderInline, indentWidth, linePrefix, childTemplate, descCount, insertPlan, movePlan, indentUnit, swapPlan, collapseBlankRuns, buildManuscriptDocx, parseInlineRuns, isVerseLine, sqliteReadTable, smmReadFontFamilyNames, smmListSystemFonts, smmDedupeVerseLines, smmIsVerseEditorLine, smmHanjaLoad, smmHanjaCands, smmHanjaSegments, smmHanjaSyllableSegments, smmHanjaApply, smmInflateGzip, smmB64ToBytes, smmMatchHotkey, SmmHanjaPicker, smmHanjaCollectPieces, SermonMindmapView, smmBibleQuoteEnd, smmCountText, smmCountNarrow, smmCountParseNative, smmCountCombos, smmAnalyzeHighlightText, smmTransformHighlightText, smmCycleLineMark, smmSetLineMark, smmCycleHeading, smmPromoteHeading, smmDemoteHeading, smmToggleQuote };
