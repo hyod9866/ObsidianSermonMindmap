@@ -9736,10 +9736,14 @@ function smmEditorVerseCss(s) {
     '.cm-editor .cm-line.smm-ed-verse *',
     '.markdown-source-view .cm-line.smm-ed-verse',
     '.markdown-source-view .cm-line.smm-ed-verse *',
+    '.markdown-rendered:not(.smr-flow) .smm-ed-verse',
+    '.markdown-rendered:not(.smr-flow) .smm-ed-verse *:not(.smm-verse-ref):not(.list-bullet):not(.smm-ed-vmark)',
+    '.markdown-preview-view:not(.smr-flow) .smm-ed-verse',
+    '.markdown-preview-view:not(.smr-flow) .smm-ed-verse *:not(.smm-verse-ref):not(.list-bullet):not(.smm-ed-vmark)',
   ].join(',');
   let css = `${sel}{font-family:${stack} !important;}`;
   if (px > 0) {
-    css += `.cm-editor .cm-line.smm-ed-verse,.markdown-source-view .cm-line.smm-ed-verse{font-size:${px}px !important;}`;
+    css += `.cm-editor .cm-line.smm-ed-verse,.markdown-source-view .cm-line.smm-ed-verse,.markdown-rendered:not(.smr-flow) .smm-ed-verse,.markdown-preview-view:not(.smr-flow) .smm-ed-verse{font-size:${px}px !important;}`;
   }
 
   // 1. 성경구절 줄 글자 색상 (밝은 테마 / 다크 모드)
@@ -10227,7 +10231,7 @@ function smrPreserveLineBreaks(md, cfg) {
       if (numberedBullet) {
         markSrc = numberedBullet.replace(/([.)])$/, '\\$1') + ' ';
       } else {
-        const markCh = explicit ? explicit.mark : (outlineM ? outlineM.mark : marks[Math.min(depth, marks.length - 1)]);
+        const markCh = explicit ? explicit.mark : (outlineM ? outlineM.mark : (wasListItem && depth === 0 ? '•' : marks[Math.min(depth, marks.length - 1)]));
         isStrong = (depth === 0) && smmIsStrongMark(markCh, cfg);
         if (isStrong) {
           const wideCls = smmIsWideMark(markCh) ? ' smm-mark-wide' : '';

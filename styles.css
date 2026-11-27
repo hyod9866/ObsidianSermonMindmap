@@ -1489,10 +1489,12 @@
   color: transparent !important;
 }
 
-/* 1단계(최상위) 순서 없는 목록: 단일 글머리 점(•) */
+/* 1단계(최상위) 순서 없는 목록: 단일 글머리 점(•) 수직 중앙 정렬 유지 */
 .markdown-rendered ul > li > .list-bullet,
 .markdown-preview-view ul > li > .list-bullet {
-  display: inline-block !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  vertical-align: middle !important;
 }
 
 /* 읽기 화면 중첩 목록 (2단계 이상):
