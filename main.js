@@ -8771,11 +8771,13 @@ function smmPaintReadingVerses(root, plugin) {
     const on = !!(plugin.settings && plugin.settings.edVerseFont);
     const stack = smmFontStackVerse(plugin.settings && plugin.settings.mmFontVerse, 'verse');
     const px = smmNumOr(plugin.settings && plugin.settings.edVerseSize, 0);
-    const targets = root.querySelectorAll('p, li');
+    const targets = root.querySelectorAll('p, li, .smm-rv-line-row');
     let n = 0;
     for (let i = 0; i < targets.length; i++) {
       const el = targets[i];
-      const ownText = smmOwnLineText(el);
+      if (el.tagName === 'P' && el.querySelector(':scope > .smm-rv-line-row')) continue;
+      const textHost = el.querySelector(':scope > .smm-rv-text-cell') || el;
+      const ownText = smmOwnLineText(textHost);
       // `>` 인용 안의 글은 항상 성경구절로 봄 (마인드맵과 같은 기준)
       const inQuote = !!(el.closest && el.closest('blockquote')) || smmIsQuoteEditorLine(ownText);
       if (inQuote !== el.classList.contains('smm-ed-quote')) el.classList.toggle('smm-ed-quote', inQuote);
@@ -12605,10 +12607,10 @@ class SermonMindmapPlugin extends Plugin {
         if (this._smrRenderDepth > 0) return;
         try { if (el && el.closest && el.closest('.smr-root, .smm-container, .smm-node')) return; } catch (e) { /* 무시 */ }
         try { smmFixIndentedReadingQuotes(el); } catch (e) { /* 무시 */ }
-        try { smmPaintReadingVerses(el, this); } catch (e) { /* 무시 */ }
         try { smmFixReadingHighlightSpacing(el); } catch (e) { /* 무시 */ }
         try { smmFixColorMarks(el); } catch (e) { /* 무시 */ }
         try { smmPaintReadingBodyMarks(el, ctx, this); } catch (e) { /* 무시 */ }
+        try { smmPaintReadingVerses(el, this); } catch (e) { /* 무시 */ }
         try { smmPaintReadingShades(el, ctx); } catch (e) { /* 무시 */ }
         try { smmPaintReadingVerseRefs(el); } catch (e) { /* 무시 */ }
         try { smmPaintReadingBrackets(el); } catch (e) { /* 무시 */ }
