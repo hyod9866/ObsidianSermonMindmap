@@ -8786,10 +8786,16 @@ function smmPaintReadingVerses(root, plugin) {
         if (el.style.getPropertyValue('font-family') !== stack) {
           el.style.setProperty('font-family', stack, 'important');
         }
+        if (/Bold|Heavy|Black/i.test(String((plugin.settings && plugin.settings.mmFontVerse) || ''))) {
+          el.style.setProperty('font-weight', 'bold', 'important');
+        } else if (el.style.fontWeight) {
+          el.style.removeProperty('font-weight');
+        }
         if (px > 0) el.style.setProperty('font-size', px + 'px', 'important');
         else if (el.style.fontSize) el.style.removeProperty('font-size');
-      } else if (el.style.fontFamily || el.style.fontSize) {
+      } else if (el.style.fontFamily || el.style.fontSize || el.style.fontWeight) {
         el.style.removeProperty('font-family');
+        el.style.removeProperty('font-weight');
         el.style.removeProperty('font-size');
       }
     }
@@ -9741,7 +9747,9 @@ function smmEditorVerseCss(s) {
     '.markdown-preview-view:not(.smr-flow) .smm-ed-verse',
     '.markdown-preview-view:not(.smr-flow) .smm-ed-verse *:not(.smm-verse-ref):not(.list-bullet):not(.smm-ed-vmark)',
   ].join(',');
-  let css = `${sel}{font-family:${stack} !important;}`;
+  const verseFontName = String((s && s.mmFontVerse) || '').trim();
+  const verseWeightRule = /Bold|Heavy|Black/i.test(verseFontName) ? 'font-weight:bold !important;' : '';
+  let css = `${sel}{font-family:${stack} !important;${verseWeightRule}}`;
   if (px > 0) {
     css += `.cm-editor .cm-line.smm-ed-verse,.markdown-source-view .cm-line.smm-ed-verse,.markdown-rendered:not(.smr-flow) .smm-ed-verse,.markdown-preview-view:not(.smr-flow) .smm-ed-verse{font-size:${px}px !important;}`;
   }
